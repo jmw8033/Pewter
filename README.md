@@ -1,3 +1,3 @@
 # Pewter
-Emailed invoice file handles.
+Emailed invoice file handler.
 In collaboration with the Rectangulator.
