@@ -27,6 +27,7 @@ class EmailProcessor:
     TRUSTED_ADDRESS = config.TRUSTED_ADDRESS
     ADDRESS = config.ADDRESS
     WAIT_TIME = 10 #seconds
+    TESTING = True
 
     def __init__(self, root):
         # RANDOM VARIABLES
@@ -191,11 +192,12 @@ class EmailProcessor:
                         error = True
                         continue
                 
-                    # Check if print is successful
-                    invoice_printed = self.print_invoice(filepath, imap.username)
-                    if not invoice_printed:
-                        self.move_email(imap, mail, "Need_Print", subject)
-                        continue
+                    if not self.TESTING:
+                        # Check if print is successful
+                        invoice_printed = self.print_invoice(filepath, imap.username)
+                        if not invoice_printed:
+                            self.move_email(imap, mail, "Need_Print", subject)
+                            continue
             
             # Move to invoices label if no errors
             if not error:

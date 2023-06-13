@@ -9,6 +9,7 @@ import tkinter as tk
 import numpy as np
 import pytesseract
 import traceback
+import threading
 import keyboard
 import smtplib
 import config
@@ -72,19 +73,24 @@ class Rectangulator:
                 log(extracted_text)
 
             # Ask for verifictaion
-            while True:
-                print("Does the following text match what you selected? (press y/n): ")
-                choice = keyboard.read_event()
-                if choice.event_type == "down":
-                    if choice.name.lower() == "y":
-                        plt.close(self.fig)
-                        break
-                    elif choice.name.lower() == "n":
-                        log("Please reselect rectangles")
-                        self.reset_rectangles()
-                        break
-                    else:
-                        log("Invalid choice. Please enter 'y' or 'n'.")
+            def handle_user_input():
+                while True:
+                    print("Does the following text match what you selected? (press y/n): ")
+                    choice = keyboard.read_event()
+                    if choice.event_type == "down":
+                        if choice.name.lower() == "y":
+                            plt.close(self.fig)
+                            break
+                        elif choice.name.lower() == "n":
+                            log("Please reselect rectangles")
+                            self.reset_rectangles()
+                            break
+                        else:
+                            log("Invalid choice. Please enter 'y' or 'n'.")
+
+            input_thread = threading.Thread(target=handle_user_input)
+            input_thread.start()
+
             
     def on_button_release(self, event): # Save rectangle coordinates
         if event.button != 1 or self.rect is None:
@@ -163,9 +169,7 @@ class Rectangulator:
                 extracted_text_combined = '_'.join(extracted_texts[1:])
                 sanitized_extracted_text = sanitize_filename(extracted_text_combined)
                 new_filename = os.path.join(os.path.dirname(self.pdf_path), f"{sanitized_extracted_text}.pdf")
-                return new_filename
-            else:
-                return self.rename_pdf()
+                return new_filename 
         except RecursionError:
             log("Window closed please try again")
             return None
@@ -287,7 +291,7 @@ def send_email():
         message.attach(MIMEText("Must create template", "plain"))
 
         # Send the email
-        with smtplib.SMTP(config.SMPT_SERVER, 587) as server:
+        with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
             server.starttls()
             server.login(sender_email, config.ACP_PASS)
             server.sendmail(sender_email, reciever_email, message.as_string())
