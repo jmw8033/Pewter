@@ -27,7 +27,7 @@ class EmailProcessor:
     TRUSTED_ADDRESS = config.TRUSTED_ADDRESS
     ADDRESS = config.ADDRESS
     WAIT_TIME = 10 #seconds
-    TESTING = True
+    TESTING = False
 
     def __init__(self, root):
         # RANDOM VARIABLES
