@@ -30,7 +30,7 @@ class EmailProcessor:
     TESTING = False
 
     def __init__(self, root):
-        # RANDOM VARIABLES
+        # VARIABLES
         self.alert_window = None #used for pop ups
         self.window_closed = None
         self.processor_thread = None
@@ -38,7 +38,7 @@ class EmailProcessor:
         self.pause_event = threading.Event() #used for cycles
         self.root = root
 
-        # BUTTONS
+        # GUI BUTTONS
         self.button_frame = tk.Frame(root)
         self.button_frame.pack(side=tk.TOP)
 
@@ -54,7 +54,7 @@ class EmailProcessor:
         self.log_text_widget = tk.Text(root, height=30, width=140) #text label
         self.log_text_widget.pack()
 
-        # MESSAGE COLORS
+        # GUI STYLES
         self.log_text_widget.tag_configure("red", background="#FFCCCC")
         self.log_text_widget.tag_configure("yellow", background="yellow")
         self.log_text_widget.tag_configure("orange", background="#FFB434")	
@@ -278,14 +278,14 @@ class EmailProcessor:
         try:
             sender_email = f"{imap.username}{self.ADDRESS}"
 
-            # Create a multipart message
+            # Create a multipart message and set headers
             message = MIMEMultipart()
             message["Subject"] = subject
             message["From"] = sender_email
             message["To"] = self.RECIEVER_EMAIL
             message.attach(MIMEText(body, "plain"))
 
-            # Send the email
+            # Send the email using SMTP
             with smtplib.SMTP(self.SMTP_SERVER, 587) as server:
                 server.starttls()
                 server.login(sender_email, imap.password)
