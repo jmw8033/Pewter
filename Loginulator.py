@@ -79,7 +79,7 @@ class Loginulator:
                 # Wait for the page to load
                 WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Download PDF Statements')]")))
                 
-                # Simulate clicking on each individual statement to download
+                # Simulate clicking on most recent statement to download
                 statement_button = self.driver.find_element(By.XPATH, "//a[contains(@title, 'Download PDF Statements')]")
                 statement_url = statement_button.get_attribute("href")
                 self.driver.get(statement_url)
@@ -144,7 +144,30 @@ class Loginulator:
 
     def DELTA(self):
         try:
-            self.login(self.driver, config.DELTA_USER, config.DELTA_PASS, config.DELTA_LINK, "usernameInput", "passwordInput")
+            # Login to the default account
+            self.login(config.DELTA_USER, config.DELTA_PASS, config.DELTA_LINK, "username", "password")
+
+            # Wait for the page to load
+            WebDriverWait(self.driver, 20).until(EC.url_changes(config.DELTA_LINK))
+
+            # Go to the activites page
+            self.driver.get(config.DELTA_ACT_LINK)
+
+            # Simulate clicking on most recent invoice to download
+            statement_button = WebDriverWait(self.driver, 20).until(EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '/ebillpay/my-invoices/')]")))
+            statement_button.click()
+
+            # Wait for page to load and press drop down button
+            drop_down = WebDriverWait(self.driver, 20).until(EC.presence_of_element_located((By.XPATH, "//button[contains(@class, 'MuiButtonBase-root MuiButton-root')]")))
+            drop_down.click()
+
+            # Press the download button
+            download_button = self.driver.find_element(By.XPATH, "//button[contains(text(), 'Download invoice PDF')]")
+            download_button.click()
+            
+            # Wait for the download to complete
+            time.sleep(15)
+
 
         except Exception as e:
             print(f"{str(e)}")
@@ -153,4 +176,4 @@ class Loginulator:
             self.driver.quit()
 
 if __name__ == "__main__":
-    loginulator = Loginulator("ameri")
+    loginulator = Loginulator("delta")
