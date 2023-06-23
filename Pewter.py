@@ -34,7 +34,7 @@ class EmailProcessor:
         self.alert_window = None #used for pop ups
         self.window_closed = None
         self.processor_thread = None
-        self.processor_running = True
+        self.processor_running = False
         self.pause_event = threading.Event() #used for cycles
         self.root = root
 
@@ -50,6 +50,9 @@ class EmailProcessor:
 
         self.resume_button = tk.Button(self.button_frame, text="Resume", command=self.resume_processing, state=tk.DISABLED) #resume button
         self.resume_button.pack(side=tk.LEFT, padx=1)
+
+        self.restart_button = tk.Button(self.button_frame, text="Restart", command=self.restart_processing, state=tk.DISABLED) #restart button
+        self.restart_button.pack(side=tk.LEFT, padx=1)
 
         self.log_text_widget = tk.Text(root, height=30, width=140) #text label
         self.log_text_widget.pack()
@@ -69,10 +72,12 @@ class EmailProcessor:
     def main(self): # Runs when start button is pressed
         self.log("Connecting...", tag="dgreen")
         self.root.update()
+        self.processor_running = True
 
         # Enable and disable buttons
         self.start_button.config(state=tk.DISABLED) 
         self.pause_button.config(state=tk.NORMAL)
+        self.restart_button.config(state=tk.NORMAL)
         
         # ACP login
         self.imap_acp = self.connect(self.ACP_USER, self.IMAP_SERVER, self.ACP_PASS)
@@ -359,6 +364,11 @@ class EmailProcessor:
         self.log("Processing resumed.", tag="green")
         self.pause_button.config(state=tk.NORMAL)
         self.resume_button.config(state=tk.DISABLED)
+
+    def restart_processing(self): # Restarts processing
+        self.log("Restarting...", tag="orange")
+        self.processor_running = False
+        self.main()
 
     def on_program_exit(self): # Runs when program is closed
         self.log("Disconnecting...", tag="red")
