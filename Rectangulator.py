@@ -1,4 +1,3 @@
-
 from email.mime.multipart import MIMEMultipart
 from matplotlib.patches import Rectangle
 from matplotlib.widgets import Button
