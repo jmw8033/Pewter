@@ -27,6 +27,7 @@ class EmailProcessor:
     TRUSTED_ADDRESS = config.TRUSTED_ADDRESS
     ADDRESS = config.ADDRESS
     WAIT_TIME = 10 #seconds
+    RECONNECT_CYCLE_COUNT = 3600 / WAIT_TIME #1 hour
     TESTING = False
 
     def __init__(self, root):
@@ -54,18 +55,20 @@ class EmailProcessor:
         self.restart_button = tk.Button(self.button_frame, text="Restart", command=self.restart_processing, state=tk.DISABLED) #restart button
         self.restart_button.pack(side=tk.LEFT, padx=1)
 
-        self.log_text_widget = tk.Text(root, height=30, width=140) #text label
+        self.log_text_widget = tk.Text(root, height=30, width=140, spacing1=4, padx=0, pady=0) #text label
         self.log_text_widget.pack()
 
         # GUI STYLES
         self.log_text_widget.tag_configure("red", background="#FFCCCC")
         self.log_text_widget.tag_configure("yellow", background="yellow")
         self.log_text_widget.tag_configure("orange", background="#FFB434")	
-        self.log_text_widget.tag_configure("green", background="#CCFFCC")	
-        self.log_text_widget.tag_configure("dgreen", background="#39FF12")	
+        self.log_text_widget.tag_configure("lgreen", background="#CCFFCC")	
+        self.log_text_widget.tag_configure("green", background="#39FF12")	
+        self.log_text_widget.tag_configure("dgreen", background="#00994d")	
         self.log_text_widget.tag_configure("blue", background="#89CFF0")
         self.log_text_widget.tag_configure("gray", background="#DEDDDD")
         self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD") #gray
+        self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8) #default
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) #runs exit protocol on window close
         
@@ -80,61 +83,52 @@ class EmailProcessor:
         self.restart_button.config(state=tk.NORMAL)
         
         # ACP login
-        self.imap_acp = self.connect(self.ACP_USER, self.IMAP_SERVER, self.ACP_PASS)
+        self.imap_acp = self.connect(self.ACP_USER, self.ACP_PASS)
         if self.imap_acp:
             self.processor_thread = threading.Thread(target=self.search_inbox, args=[self.imap_acp])
             self.processor_thread.start()
 
         # APC login
-        self.imap_apc = self.connect(self.APC_USER, self.IMAP_SERVER, self.APC_PASS)
+        self.imap_apc = self.connect(self.APC_USER, self.APC_PASS)
         if self.imap_apc:
             self.processor_thread = threading.Thread(target=self.search_inbox, args=[self.imap_apc])
             self.processor_thread.start()
 
-    def connect(self, username, server, password): # returns imap object
+    def connect(self, username, password, log=True): # returns imap object
         user = f"{username}{self.ADDRESS}"
         try:
-            # Get currrent time
-            current_time = time.strftime("%H:%M:%S", time.localtime())
-            current_date = time.strftime("%Y-%m-%d", time.localtime())
-
             # Log into email
-            imap = imaplib.IMAP4_SSL(server)
+            imap = imaplib.IMAP4_SSL(self.IMAP_SERVER)
             imap.login(user, password)
-            self.log(f"--- Connected to {username} --- {current_time} {current_date}", tag="dgreen")
+            if log:
+                self.log(f"--- Connected to {username} --- {self.current_time} {self.current_date}", tag="dgreen")
 
             return MYImap(imap, username, password)
         except imaplib.IMAP4_SSL.error as e:
             self.log(f"Unable to connect to {username}: {str(e)}", tag="red")
             return
         
-    def disconnect(self, imap):
+    def disconnect(self, imap, log=True):
         try:
-            # Get currrent time
-            current_time = time.strftime("%H:%M:%S", time.localtime())
-            current_date = time.strftime("%Y-%m-%d", time.localtime())
-
             # Logout
             imap.imap.logout()
-            self.log(f"--- Disconnected from {imap.username} --- {current_time} {current_date}", tag="red")
+            if log:
+                self.log(f"--- Disconnected from {imap.username} --- {self.current_time} {self.current_date}", tag="red")
         except Exception as e:
             self.log(f"An error occurred while disconnecting: {str(e)}", tag="red")        
 
     def search_inbox(self, imap): # This is what runs each cycle
         try:
+            cycle_count = 0
             while self.processor_running:
                 if not self.pause_event.is_set():
-                    # Get currrent time
-                    current_time = time.strftime("%H:%M:%S", time.localtime())
-                    current_date = time.strftime("%Y-%m-%d", time.localtime())
-
                     # Search for all emails in the inbox
                     imap.imap.select("inbox")
                     _, emails = imap.imap.search(None, "ALL")
 
                     # Check if no new mail
                     if not emails[0].split():
-                        self.log(f"No new emails for {imap.username} - {current_time} {current_date}", tag="no_new_emails")
+                        self.log(f"No new emails for {imap.username} - {self.current_time} {self.current_date}", tag="no_new_emails")
 
                         # Check if emails need to be looked at
                         self.check_label(imap, "Need_Print")
@@ -145,11 +139,19 @@ class EmailProcessor:
                         self.pause_event.wait(timeout=self.WAIT_TIME)
                     else:
                         self.process_email(imap, emails[0].split()[0])
+
+                    cycle_count += 1
+                    # Reconnect every hour
+                    if cycle_count == self.RECONNECT_CYCLE_COUNT:
+                        self.disconnect(imap, log=False)
+                        imap = self.connect(imap.username, imap.password, log=False)
+                        self.log(f"Reconnected to {imap.username} - {self.current_time} {self.current_date}", tag="green")
+                        cycle_count = 0
                     
             # Disconnect when the program is closed
             self.disconnect(imap)
         except Exception as e:  
-            self.log(f"An error occurred while searching the inbox for {imap.username}: {str(e)}", tag="red", sender_email=imap)
+            self.log(f"An error occurred while searching the inbox for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
 
     def process_email(self, imap, mail): # Handles each email
         subject = ""
@@ -301,19 +303,17 @@ class EmailProcessor:
 
     def log(self, *args, tag=None, sender_imap=None): # Logs to text box and log file
         try:
-            # Check if window is still open
-            if self.window_closed:
+            if self.window_closed: #check if window is still open
                 return
-            
-            # Print to the text box
-            message = ' '.join([str(arg) for arg in args])
+            message = ' '.join([str(arg) for arg in args]) #convert args to string
 
             # Get rid of no_new_emails messages
             if tag == "no_new_emails":
                 self.remove_messages(message)
             
             # Insert the new message to the text widget
-            self.log_text_widget.insert(tk.END, message + "\n", tag)
+            # Add a border around the message
+            self.log_text_widget.insert(tk.END, message + "\n", (tag, "default"))
             self.log_text_widget.see(tk.END)  #scroll to the end of the text widget   
 
             # Send email for errors
@@ -328,10 +328,6 @@ class EmailProcessor:
 
     def check_label(self, imap, label): # Checks for emails that need to be looked at in labels
         try:
-            # Get time
-            current_time = time.strftime("%H:%M:%S", time.localtime())
-            current_date = time.strftime("%Y-%m-%d", time.localtime())
-
             # Check if any emails in specified label
             imap.imap.select(label)
             _, data = imap.imap.search(None, 'ALL')
@@ -339,7 +335,7 @@ class EmailProcessor:
 
             # Alert user if there are emails
             if len(email_ids) > 0:
-                self.log(f"{len(email_ids)} emails in {label} for {imap.username} - {current_time} {current_date}", tag="orange")
+                self.log(f"{len(email_ids)} emails in {label} for {imap.username} - {self.current_time} {self.current_date}", tag="orange")
         except Exception as e:
             self.log(f"An error occurred while checking the label for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
     
@@ -358,12 +354,14 @@ class EmailProcessor:
         self.log("Processing paused.", tag="yellow")
         self.pause_button.config(state=tk.DISABLED)
         self.resume_button.config(state=tk.NORMAL)
+        self.restart_button.config(state=tk.DISABLED)
 
     def resume_processing(self): # Resumes processing
         self.pause_event.clear()
-        self.log("Processing resumed.", tag="green")
+        self.log("Processing resumed.", tag="yellow")
         self.pause_button.config(state=tk.NORMAL)
         self.resume_button.config(state=tk.DISABLED)
+        self.restart_button.config(state=tk.NORMAL)
 
     def restart_processing(self): # Restarts processing
         self.log("Restarting...", tag="orange")
@@ -394,6 +392,13 @@ class EmailProcessor:
         self.root.wait_window(self.alert_window)
         return self.alert_window.choice
 
+    @property
+    def current_time(self):
+        return time.strftime("%H:%M:%S", time.localtime())
+    
+    @property
+    def current_date(self):
+        return time.strftime("%Y-%m-%d", time.localtime())
 
 class MYImap:
     
