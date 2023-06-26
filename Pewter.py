@@ -105,7 +105,7 @@ class EmailProcessor:
 
             return MYImap(imap, username, password)
         except imaplib.IMAP4_SSL.error as e:
-            self.log(f"Unable to connect to {username}: {str(e)}", tag="red")
+            self.log(f"Unable to connect to {username}: {str(e)}", tag="red", sender_imap=imap)
             return
         
     def disconnect(self, imap, log=True):
@@ -115,7 +115,7 @@ class EmailProcessor:
             if log:
                 self.log(f"--- Disconnected from {imap.username} --- {self.current_time} {self.current_date}", tag="red")
         except Exception as e:
-            self.log(f"An error occurred while disconnecting: {str(e)}", tag="red")        
+            self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", sender_imap=imap)        
 
     def search_inbox(self, imap): # This is what runs each cycle
         try:
@@ -131,9 +131,7 @@ class EmailProcessor:
                         self.log(f"No new emails for {imap.username} - {self.current_time} {self.current_date}", tag="no_new_emails")
 
                         # Check if emails need to be looked at
-                        self.check_label(imap, "Need_Print")
-                        self.check_label(imap, "Need_Login")
-                        self.check_label(imap, "Errors")
+                        self.check_labels(imap, ["Need_Print", "Need_Login", "Errors"])
 
                         # Pause until next cycle
                         self.pause_event.wait(timeout=self.WAIT_TIME)
@@ -143,9 +141,7 @@ class EmailProcessor:
                     cycle_count += 1
                     # Reconnect every hour
                     if cycle_count == self.RECONNECT_CYCLE_COUNT:
-                        self.disconnect(imap, log=False)
-                        imap = self.connect(imap.username, imap.password, log=False)
-                        self.log(f"Reconnected to {imap.username} - {self.current_time} {self.current_date}", tag="green")
+                        self.reconnect(imap)
                         cycle_count = 0
                     
             # Disconnect when the program is closed
@@ -155,69 +151,62 @@ class EmailProcessor:
 
     def process_email(self, imap, mail): # Handles each email
         subject = ""
-        try:
-            try: # Try to fetch the email
-                _, data = imap.imap.fetch(mail, "(RFC822)")
-                # Get email body
-                raw_email = data[0][1]
-                msg = email.message_from_bytes(raw_email)
-                # Get email subject and sender
-                subject = msg["Subject"]
-                sender_email = email.utils.parseaddr(msg["From"])[1]
-            except Exception as e:
-                self.log(f"Failed to fetch the email for {imap.username} - {str(e)}", tag="red", sender_imap=imap)
-                self.move_email(imap, mail, "Errors", "")
-                return
-            
+        try: 
+            # Fetch email
+            _, data = imap.imap.fetch(mail, "(RFC822)")
+            raw_email = data[0][1]
+            msg = email.message_from_bytes(raw_email)
+            subject = msg["Subject"]
+            sender_email = email.utils.parseaddr(msg["From"])[1]
+
             # Check if sender is trusted
             if not sender_email.endswith(self.TRUSTED_ADDRESS):
-                # Move to non invoices label
                 self.move_email(imap, mail, "Not_Invoices", subject)
                 return
-
-            # Check if it has an attachment
-            has_attachment = False
-            if msg.is_multipart():
-                for part in msg.walk():
-                    content_disposition = part.get("content-disposition", "")
-                    if content_disposition.startswith("attachment"):
-                        has_attachment = True
+            
+            # Check for attachments
+            has_attachment = any(part.get("content-disposition", "").startswith("attachment") for part in msg.walk() if msg.is_multipart())
             if not has_attachment:
                 self.log(f"'{subject}' has no attachment, assuming login needed for {imap.username}", tag="yellow")
                 self.move_email(imap, mail, "Need_Login", subject)
                 return 
             
-            # Iterate over email parts and find pdf
-            error = False
-            for part in msg.walk():
-                if part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
-                    # Check if download is successful
-                    invoice_downloaded, filepath = self.download_invoice(part, imap.username)
-                    if invoice_downloaded == "not_invoice":
-                        continue
-                    elif not invoice_downloaded:
-                        error = True
-                        continue
-                
-                    if not self.TESTING:
-                        # Check if print is successful
-                        invoice_printed = self.print_invoice(filepath, imap.username)
-                        if not invoice_printed:
-                            self.move_email(imap, mail, "Need_Print", subject)
-                            continue
-            
+            # Handle attachments
+            attachment_error = self.handle_attachments(imap, mail, msg, subject)
+
             # Move to invoices label if no errors
-            if not error:
+            if not attachment_error:
                 self.move_email(imap, mail, "Invoices", subject)
             else:
                 self.log(f"'{subject}' failed to download, moved to Error label for {imap.username}", tag="red", sender_imap=imap)
                 self.move_email(imap, mail, "Errors", subject)
-                
-        except Exception as e:
-            self.move_email(imap, mail, "Errors", subject)
-            self.log(f"An error occurred while processing an email for {imap.username}: {str(e)} \n {traceback.format_exc()}", tag="red", sender_imap=imap)
 
-    def download_invoice(self, part, username):
+        except Exception as e:
+            self.log(f"An error occurred while processing an email for {imap.username}: {str(e)} \n {traceback.format_exc()}", tag="red", sender_imap=imap)
+            self.move_email(imap, mail, "Errors", subject)
+            return
+        
+    def handle_attachments(self, imap, mail, msg, subject):        # Iterate over email parts and find pdf
+        error = False
+        for part in msg.walk():
+            if part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
+                # Check if download is successful
+                invoice_downloaded, filepath = self.download_invoice(part, imap)
+                if invoice_downloaded == "not_invoice":
+                    continue
+                elif not invoice_downloaded:
+                    error = True
+                    continue
+            
+                if not self.TESTING:
+                    # Check if print is successful
+                    invoice_printed = self.print_invoice(filepath, imap)
+                    if not invoice_printed:
+                        self.move_email(imap, mail, "Need_Print", subject)
+                        continue
+        return error
+
+    def download_invoice(self, part, imap):
         # Get fllename and attachment
         filename = part.get_filename()
         attachment = part.get_payload(decode=True)
@@ -226,7 +215,7 @@ class EmailProcessor:
         
         # Check if file already exists
         if os.path.exists(filepath):
-            self.log(f"Invoice file already exists at {filepath} for {username}", tag="red")
+            self.log(f"Invoice file already exists at {filepath} for {imap.username}", tag="red", sender_imap=imap)
             return False, None
 
         # Download invoice PDF
@@ -243,43 +232,43 @@ class EmailProcessor:
 
         # Check if Rectangulator fails
         if new_filepath == None:
-            self.log(f"Rectangulator failed for {username}", tag="red")
+            self.log(f"Rectangulator failed for {imap.username}", tag="red", sender_imap=imap)
             os.remove(filepath)
             return False, None
         
         # Check if invoice has already been processed
         if os.path.exists(new_filepath):
             os.remove(filepath)
-            self.log(f"New invoice file already exists at {new_filepath} for {username}", tag="red")
+            self.log(f"New invoice file already exists at {new_filepath} for {imap.username}", tag="red", sender_imap=imap)
             return False, None
         
         # Save invoice
         os.rename(filepath, new_filepath)
-        self.log(f"Created new invoice file {os.path.basename(new_filepath)} for {username}", tag="green")
+        self.log(f"Created new invoice file {os.path.basename(new_filepath)} for {imap.username}", tag="blue")
         return True, new_filepath
         
-    def print_invoice(self, filepath, username): # Printer
+    def print_invoice(self, filepath, imap): # Printer
         try:
             # Get default printer and print
             p = win32print.GetDefaultPrinter()
             win32api.ShellExecute(0, "print", filepath, None,  ".",  0)
-            self.log(f"Printed {filepath} completed successfully for {username}.", tag="green")
+            self.log(f"Printed {filepath} completed successfully for {imap.username}.", tag="blue")
             return True
         except Exception as e:
-            self.log(f"Printing failed: {str(e)}", tag="red", sender_email=username)
+            self.log(f"Printing failed: {str(e)}", tag="red", sender_email=imap.username)
             return False
 
     def move_email(self, imap, mail, label, subject): # Moves emails to labels
-        # Make a copy of the email in the specified label
-        copy = imap.imap.copy(mail, label)
+        try:
+            # Make a copy of the email in the specified label
+            copy = imap.imap.copy(mail, label)
 
-        if copy[0] == "OK":
             # Mark the original email as deleted
             imap.imap.store(mail, '+FLAGS', '\\Deleted')
             imap.imap.expunge()
             self.log(f"Email '{subject}' moved to {label} for {imap.username}.", tag="blue")
-        else:
-            self.log(f"Email '{subject}' transfer failed for {imap.username}", tag="red", sender_imap=imap)
+        except Exception as e:
+            self.log(f"Email '{subject}' transfer failed for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
 
     def send_email(self, imap, subject, body):
         try:
@@ -312,7 +301,6 @@ class EmailProcessor:
                 self.remove_messages(message)
             
             # Insert the new message to the text widget
-            # Add a border around the message
             self.log_text_widget.insert(tk.END, message + "\n", (tag, "default"))
             self.log_text_widget.see(tk.END)  #scroll to the end of the text widget   
 
@@ -326,18 +314,19 @@ class EmailProcessor:
         except Exception as e:
             print(f"Error logging: {str(e)}")
 
-    def check_label(self, imap, label): # Checks for emails that need to be looked at in labels
-        try:
-            # Check if any emails in specified label
-            imap.imap.select(label)
-            _, data = imap.imap.search(None, 'ALL')
-            email_ids = data[0].split()
+    def check_labels(self, imap, labels): # Checks for emails that need to be looked at in labels
+        for label in labels:
+            try:
+                # Check if any emails in specified label
+                imap.imap.select(label)
+                _, data = imap.imap.search(None, 'ALL')
+                email_ids = data[0].split()
 
-            # Alert user if there are emails
-            if len(email_ids) > 0:
-                self.log(f"{len(email_ids)} emails in {label} for {imap.username} - {self.current_time} {self.current_date}", tag="orange")
-        except Exception as e:
-            self.log(f"An error occurred while checking the label for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
+                # Alert user if there are emails
+                if len(email_ids) > 0:
+                    self.log(f"{len(email_ids)} emails in {label} for {imap.username} - {self.current_time} {self.current_date}", tag="orange")
+            except Exception as e:
+                self.log(f"An error occurred while checking the label for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
     
     def remove_messages(self, message): # Removes no_new_emails messages
         message = message[:-22] #cuts out the date-time
@@ -367,6 +356,11 @@ class EmailProcessor:
         self.log("Restarting...", tag="orange")
         self.processor_running = False
         self.main()
+
+    def reconnect(self, imap): # Reconnects to imap
+        self.disconnect(imap, log=False)
+        imap = self.connect(imap.username, imap.password, log=False)
+        self.log(f"Reconnected to {imap.username} - {self.current_time} {self.current_date}", tag="green")
 
     def on_program_exit(self): # Runs when program is closed
         self.log("Disconnecting...", tag="red")
