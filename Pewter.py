@@ -28,7 +28,7 @@ class EmailProcessor:
     ADDRESS = config.ADDRESS
     WAIT_TIME = 10 #seconds
     RECONNECT_CYCLE_COUNT = 3600 / WAIT_TIME #1 hour
-    TESTING = False
+    TESTING = True
 
     def __init__(self, root):
         # VARIABLES

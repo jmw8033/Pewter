@@ -89,8 +89,7 @@ class Rectangulator:
 
             input_thread = threading.Thread(target=handle_user_input)
             input_thread.start()
-
-            
+         
     def on_button_release(self, event): # Save rectangle coordinates
         if event.button != 1 or self.rect is None:
             return
@@ -256,30 +255,30 @@ def check_outlier(invoice_name, invoice_date):
         invoice_date[0] = calendar[invoice_date[1]]
         invoice_date[1] = day
         return "-".join(invoice_date)
-    elif invoice_name == "ADP SCREENING  SELECTION SERVICES":
+    elif invoice_name == "ADP SCREENING  SELECTION SERVICES" or invoice_name == "Muka Development Group Llc":
+        print("2")
         invoice_date = invoice_date.replace(",", "").split(" ")
         invoice_date[0] = calendar[invoice_date[0]]
-        return "-".join(invoice_date)
-    #elif invoice_name == "BNSF RAILWAY COMPANY":
+        invoice_date = "/".join(invoice_date)
+    
+    return clean_date(invoice_date)
+
+def clean_date(invoice_date):
     try:
         date = datetime.strptime(invoice_date, "%m/%d/%y")
-        invoice_date = date.strftime("%m/%d/%y")
+        return date.strftime("%m/%d/%y")
     except ValueError:
         try:
             date = datetime.strptime(invoice_date, "%m/%d/%Y")
-            invoice_date = date.strftime("%m/%d/%y")
+            return date.strftime("%m/%d/%y")
         except ValueError:
             return invoice_date
-    
-    return invoice_date
     
 def log(*args):
     global log_file
     global root
     with open(log_file, "a") as file:
-        message = "#RECTANGULATOR# " + ' '.join([str(arg) for arg in args])
-        root.log_text_widget.insert(tk.END, message + "\n")
-        root.log_text_widget.see(tk.END)  #scroll to the end of the text widget   
+        message = "#RECTANGULATOR# " + ' '.join([str(arg) for arg in args]) 
         print(message)
         file.write('\n'.join([str(arg) for arg in args]))
 
@@ -328,8 +327,7 @@ def main(pdf_path, template_folder, log_file_arg, root_arg):
                 if invoice_name[0] == identifier:
                     invoice_date = get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
                     invoice_num = get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
-
-                    invoice_date = check_outlier(invoice_name, invoice_date).replace("/", "-")
+                    invoice_date = check_outlier(invoice_name[0], invoice_date).replace("/", "-")
 
                     return rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf"
         except Exception as e:
