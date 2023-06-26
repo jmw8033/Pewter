@@ -252,18 +252,24 @@ def check_outlier(invoice_name, invoice_date):
     calendar = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04", "May": "05", "Jun": "06", "Jul": "07", "Aug": "08", "Sep": "09", "Oct": "10", "Nov": "11", 'Dec': "12"}
     if invoice_name == "BUZZI UNICEM USA - Cement":
         invoice_date = invoice_date.split("-")
-        invoice_date[1] = calendar[invoice_date[1]]
+        day = invoice_date[0]
+        invoice_date[0] = calendar[invoice_date[1]]
+        invoice_date[1] = day
         return "-".join(invoice_date)
-    else:
+    elif invoice_name == "ADP SCREENING  SELECTION SERVICES":
+        invoice_date = invoice_date.replace(",", "").split(" ")
+        invoice_date[0] = calendar[invoice_date[0]]
+        return "-".join(invoice_date)
+    #elif invoice_name == "BNSF RAILWAY COMPANY":
+    try:
+        date = datetime.strptime(invoice_date, "%m/%d/%y")
+        invoice_date = date.strftime("%m/%d/%y")
+    except ValueError:
         try:
-            date = datetime.strptime(invoice_date, "%m/%d/%y")
+            date = datetime.strptime(invoice_date, "%m/%d/%Y")
             invoice_date = date.strftime("%m/%d/%y")
         except ValueError:
-            try:
-                date = datetime.strptime(invoice_date, "%m/%d/%Y")
-                invoice_date = date.strftime("%m/%d/%y")
-            except ValueError:
-                return invoice_date
+            return invoice_date
     
     return invoice_date
     
