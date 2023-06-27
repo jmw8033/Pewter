@@ -168,7 +168,6 @@ class Loginulator:
             # Wait for the download to complete
             time.sleep(15)
 
-
         except Exception as e:
             print(f"{str(e)}")
         
