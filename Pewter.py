@@ -28,7 +28,7 @@ class EmailProcessor:
     ADDRESS = config.ADDRESS
     WAIT_TIME = 10 #seconds
     RECONNECT_CYCLE_COUNT = 3600 / WAIT_TIME #1 hour
-    TESTING = True
+    TESTING = False
 
     def __init__(self, root):
         # VARIABLES
@@ -74,6 +74,9 @@ class EmailProcessor:
         self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) #runs exit protocol on window close
         
     def main(self): # Runs when start button is pressed
+        if self.TESTING:
+            self.log("Testing mode enabled", tag="orange")
+            
         self.log("Connecting...", tag="dgreen")
         self.root.update()
         self.processor_running = True
