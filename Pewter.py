@@ -38,6 +38,7 @@ class EmailProcessor:
         self.processor_running = False
         self.pause_event = threading.Event() #used for cycles
         self.root = root
+        self.connected = False
 
         # GUI BUTTONS
         self.button_frame = tk.Frame(root)
@@ -100,9 +101,9 @@ class EmailProcessor:
             # Log into email
             imap = imaplib.IMAP4_SSL(self.IMAP_SERVER)
             imap.login(user, password)
+            self.connected = True
             if log:
                 self.log(f"--- Connected to {username} --- {self.current_time} {self.current_date}", tag="dgreen")
-
             return MYImap(imap, username, password)
         except imaplib.IMAP4_SSL.error as e:
             self.log(f"Unable to connect to {username}: {str(e)}", tag="red", sender_imap=imap)
@@ -112,6 +113,7 @@ class EmailProcessor:
         try:
             # Logout
             imap.imap.logout()
+            self.connected = False
             if log:
                 self.log(f"--- Disconnected from {imap.username} --- {self.current_time} {self.current_date}", tag="red")
         except Exception as e:
@@ -121,7 +123,7 @@ class EmailProcessor:
         try:
             cycle_count = 0
             while self.processor_running:
-                if not self.pause_event.is_set():
+                if not self.pause_event.is_set() and self.connected:
                     # Search for all emails in the inbox
                     imap.imap.select("inbox")
                     _, emails = imap.imap.search(None, "ALL")
@@ -141,9 +143,8 @@ class EmailProcessor:
                     cycle_count += 1
                     # Reconnect every hour
                     if cycle_count == self.RECONNECT_CYCLE_COUNT:
-                        self.reconnect(imap)
+                        imap = self.reconnect(imap)
                         cycle_count = 0
-                    
             # Disconnect when the program is closed
             self.disconnect(imap)
         except Exception as e:  
@@ -361,6 +362,7 @@ class EmailProcessor:
         self.disconnect(imap, log=False)
         imap = self.connect(imap.username, imap.password, log=False)
         self.log(f"Reconnected to {imap.username} - {self.current_time} {self.current_date}", tag="green")
+        return imap
 
     def on_program_exit(self): # Runs when program is closed
         self.log("Disconnecting...", tag="red")
