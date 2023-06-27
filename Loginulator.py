@@ -7,39 +7,47 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from config import INVOICE_FOLDER
 from config import CHROMEDRIVER_PATH
+import undetected_chromedriver as uc
 import loginulator_config as config
+import requests
+from fake_useragent import UserAgent
+import random
 import time
+import os
 
 class Loginulator:
 
-    def __init__(self, email):
+    def main(self, email):
+        self.filepaths = [] # Initialize list of filepaths
         self.driver = None # Initialize the driver to None
 
         # Dictionaey where keys are vendor emails and values are functions for specific vendor
-        potential_logins = {config.ADP: self.ADP, config.AMEX: self.AMEX, config.DELTA: self.DELTA} 
-
+        potential_logins = {config.ADP: self.ADP, config.AMEX: self.AMEX, config.DELTA: self.DELTA,
+                            config.UPS: self.UPS
+                            } 
+        
         # Check if email is in dictionary and run the corresponding function
         for email_address in potential_logins:
             if email_address in email:
-                self.setup_driver(potential_logins[email_address])
+                return self.setup_driver(potential_logins[email_address])
 
     def setup_driver(self, email_function):
         # Configure Chrome options
-        chrome_options = Options()
+        chrome_options = uc.ChromeOptions()
+        chrome_options.add_experimental_option("prefs", {"download.default_directory": INVOICE_FOLDER})
+        #chrome_options.add_experimental_option("excludeSwitches", ['enable-automation'])
 
         # Configure Chrome options for AMEX
         if email_function == self.AMEX:
             #chrome_options.add_argument("--headless")  # Disable GUI
             #chrome_options.add_argument("--disable-dev-shm-usage")  # Disable shared memory usage
-            chrome_options.add_experimental_option( # Set download directory
-                "prefs", {"download.default_directory": INVOICE_FOLDER}
-            )
+            pass
 
         # Initialize the Chrome driver
-        self.driver = webdriver.Chrome(service=Service(CHROMEDRIVER_PATH), options=chrome_options)
+        self.driver = uc.Chrome(service=Service(CHROMEDRIVER_PATH), options=chrome_options)
         
         # Run script for specific vendor
-        email_function() 
+        return email_function() 
 
     def login(self, username, password, login_url, username_field_id, password_field_id):
         # Go to the login page.
@@ -52,7 +60,7 @@ class Loginulator:
         username_field.send_keys(username)
 
         # Simulate pressing Enter.
-        username_field.send_keys(Keys.RETURN)
+        username_field.send_keys(Keys.ENTER)
 
         # Wait for the password field to be present.
         password_field = WebDriverWait(self.driver, 20).until(EC.presence_of_element_located((By.ID, password_field_id)))
@@ -61,17 +69,18 @@ class Loginulator:
         password_field.send_keys(password)
 
         # Submit the login form.
-        password_field.submit()
+        password_field.send_keys(Keys.ENTER)
 
     def ADP(self):
         try:
             self.login(self.driver, config.ADP_USER, config.ADP_PASS, config.ADP_LINK, "login-form_username", "login-form_password")
-
+            #unfinished
         except Exception as e:
             print(f"{str(e)}")
         
         finally:
             self.driver.quit()
+            return self.filepaths
 
     def AMEX(self):
         try:
@@ -83,6 +92,7 @@ class Loginulator:
                 statement_button = self.driver.find_element(By.XPATH, "//a[contains(@title, 'Download PDF Statements')]")
                 statement_url = statement_button.get_attribute("href")
                 self.driver.get(statement_url)
+                self.filepaths.append(statement_url)
                 time.sleep(1) 
 
             def switch_account(account_number):
@@ -141,6 +151,7 @@ class Loginulator:
 
         finally:
             self.driver.quit()
+            return self.filepaths
 
     def DELTA(self):
         try:
@@ -173,6 +184,45 @@ class Loginulator:
         
         finally:
             self.driver.quit()
+            return self.filepaths
+
+    def UPS(self):
+        try:
+            self.login(config.UPS_USER, config.UPS_PASS, config.UPS_LINK, "email", "pwd")
+
+            # Click on Elipses
+            elipses_button = WebDriverWait(self.driver, 20).until(EC.presence_of_element_located((By.XPATH, "//i[@class='fas fa-ellipsis-v']")))
+            elipses_button.click()
+
+            # Click on "Download Invoice"
+            download_button = self.driver.find_element(By.XPATH, "//button[contains(text(), 'Download Invoice')]")
+            download_button.click()
+
+            # Click Download Button
+            download_button = self.driver.find_element(By.XPATH, "//button[@id='download-doc-undefined']")
+            download_button.click()
+
+            # Wait for page to load
+            time.sleep(2)
+
+            # Create a random filename
+            filename = os.path.join(INVOICE_FOLDER, "UPS_Invoice" + str(random.randint(0, 1000000)) + ".pdf")
+            self.filepaths.append(filename)
+
+            response = requests.get(self.driver.current_url)
+            with open("output.pdf", 'wb') as f:
+                f.write(response.content)
+
+        except Exception as e:
+            print(f"{str(e)}")
+        
+        finally:
+            self.driver.quit()
+            return self.filepaths
+
+def get_filepaths(email):
+    filepaths = Loginulator().main(email)
+    return filepaths
 
 if __name__ == "__main__":
-    loginulator = Loginulator("delta")
+    get_filepaths("ups")

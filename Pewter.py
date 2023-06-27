@@ -1,4 +1,5 @@
 import Rectangulator
+import Loginulator
 import win32print
 import threading
 import traceback
@@ -76,7 +77,7 @@ class EmailProcessor:
     def main(self): # Runs when start button is pressed
         if self.TESTING:
             self.log("Testing mode enabled", tag="orange")
-            
+
         self.log("Connecting...", tag="dgreen")
         self.root.update()
         self.processor_running = True
@@ -171,12 +172,10 @@ class EmailProcessor:
             # Check for attachments
             has_attachment = any(part.get("content-disposition", "").startswith("attachment") for part in msg.walk() if msg.is_multipart())
             if not has_attachment:
-                self.log(f"'{subject}' has no attachment, assuming login needed for {imap.username}", tag="yellow")
-                self.move_email(imap, mail, "Need_Login", subject)
-                return 
-            
-            # Handle attachments
-            attachment_error = self.handle_attachments(imap, mail, msg, subject)
+                attachment_error = self.handle_login(imap, mail, msg, subject)
+            else:            
+                # Handle attachments
+                attachment_error = self.handle_attachments(imap, mail, msg, subject)
 
             # Move to invoices label if no errors
             if not attachment_error:
@@ -190,6 +189,25 @@ class EmailProcessor:
             self.move_email(imap, mail, "Errors", subject)
             return
         
+    def handle_login(self, imap, mail, msg, subject): # Handles login emails
+        filepaths = Loginulator.get_filepaths(msg)
+        if not filepaths:
+            self.log(f"Loginulator failed for '{subject}' for {imap.username}", tag="red", sender_imap=imap)
+            self.move_email(imap, mail, "Need_Login", subject)
+            return True
+        
+        for filepath in filepaths:
+            new_filepath = Rectangulator.main(filepath, self.TEMPLATE_FOLDER, self.LOG_FILE2, self)
+            try:
+                # Save invoice
+                os.rename(filepath, new_filepath)
+                self.log(f"Created new invoice file {os.path.basename(new_filepath)} for {imap.username}", tag="blue")
+                self.print_invoice(new_filepath, imap, mail, subject)
+                return False
+            except Exception as e:
+                self.log(f"An error occurred while renaming {filepath} to {new_filepath}: {str(e)}", tag="red", sender_imap=imap)
+                return True
+
     def handle_attachments(self, imap, mail, msg, subject):        # Iterate over email parts and find pdf
         error = False
         for part in msg.walk():
@@ -203,11 +221,7 @@ class EmailProcessor:
                     continue
             
                 if not self.TESTING:
-                    # Check if print is successful
-                    invoice_printed = self.print_invoice(filepath, imap)
-                    if not invoice_printed:
-                        self.move_email(imap, mail, "Need_Print", subject)
-                        continue
+                    self.print_invoice(filepath, imap, mail, subject)
         return error
 
     def download_invoice(self, part, imap):
@@ -251,15 +265,16 @@ class EmailProcessor:
         self.log(f"Created new invoice file {os.path.basename(new_filepath)} for {imap.username}", tag="blue")
         return True, new_filepath
         
-    def print_invoice(self, filepath, imap): # Printer
+    def print_invoice(self, filepath, imap, mail, subject): # Printer
         try:
             # Get default printer and print
             p = win32print.GetDefaultPrinter()
             win32api.ShellExecute(0, "print", filepath, None,  ".",  0)
-            self.log(f"Printed {filepath} completed successfully for {imap.username}.", tag="blue")
+            self.log(f"Printed {os.path.basename(filepath)} completed successfully for {imap.username}.", tag="blue")
             return True
         except Exception as e:
-            self.log(f"Printing failed: {str(e)}", tag="red", sender_email=imap.username)
+            self.move_email(imap, mail, "Need_Print", subject)
+            self.log(f"Printing failed: {str(e)}", tag="red", sender_imap=imap)
             return False
 
     def move_email(self, imap, mail, label, subject): # Moves emails to labels
