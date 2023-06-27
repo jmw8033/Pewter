@@ -203,40 +203,31 @@ def get_text_in_rect(rect, pdf_path):
         width = float(rect.get_width())
         height = float(rect.get_height())
 
-        # Open the PDF document
+        # Open the first page of the PDF document and get words
         doc = fitz.open(pdf_path)
-
-        # Get the page where the rectangle is located (assuming it's the first page)
         page = doc[0]
-
-        # Get the words within the rectangle's bounding box
         words = page.get_text("words")
 
         # Find words that fall within the specified rectangle
         extracted_text = ""
         for word in words:
-            word_x, word_y, _, _ = word[:4]  # Get word coordinates
+            word_x, word_y, _, _ = word[:4] #get word coordinates
             if x <= float(word_x) <= x + width and y <= float(word_y) <= y + height:
-                extracted_text += word[4] + " " # Append the word to extracted text
+                extracted_text += word[4] + " " #append the word to extracted text
+        extracted_text = extracted_text.strip() #remove leading/trailing spaces
 
-        extracted_text = extracted_text.strip()  # Remove leading/trailing spaces
-
+        # If no text was extracted, try OCR using pytesseract
         page_width, page_height = page.rect.width, page.rect.height
         x, y, width, height = math.ceil(float(x)), math.ceil(float(y)), math.ceil(float(width)), math.ceil(float(height))
-
-        # Try OCR if no text was extracted and the rectangle is within page boundaries
         if extracted_text == "" and x >= 0 and y >= 0 and x + width <= page_width and y + height <= page_height: 
             pix = page.get_pixmap()
             img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-            # Extract the image region within the rectangle
+            # Extract the region of interest and convert to grayscale then use OCR
             img_region = img_array[y:y + height, x:x + width, :]
-
-            # Convert the image region to grayscale
             img_gray = np.mean(img_region, axis=2).astype(np.uint8)
-
-            # Apply OCR using pytesseract
             extracted_text = pytesseract.image_to_string(img_gray)
 
+        # If OCR fails, set extracted text to ""
         if extracted_text == None:
             extracted_text = ""
 
@@ -250,13 +241,14 @@ def get_text_in_rect(rect, pdf_path):
 def check_outlier(invoice_name, invoice_date):
     calendar = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04", "May": "05", "Jun": "06", "Jul": "07", "Aug": "08", "Sep": "09", "Oct": "10", "Nov": "11", 'Dec': "12"}
     if invoice_name == "BUZZI UNICEM USA - Cement":
+        # Uses format "DD-Month-YY"
         invoice_date = invoice_date.split("-")
         day = invoice_date[0]
         invoice_date[0] = calendar[invoice_date[1]]
         invoice_date[1] = day
         return "-".join(invoice_date)
-    elif invoice_name == "ADP SCREENING  SELECTION SERVICES" or invoice_name == "Muka Development Group Llc":
-        print("2")
+    elif invoice_name in {"ADP SCREENING  SELECTION SERVICES", "Muka Development Group Llc"}:
+        # Uses format "Month DD, YYYY"
         invoice_date = invoice_date.replace(",", "").split(" ")
         invoice_date[0] = calendar[invoice_date[0]]
         invoice_date = "/".join(invoice_date)
@@ -304,6 +296,7 @@ def send_email():
             log(f"Error sending email from {sender_email} - {str(e)}")
 
 def not_invoice(event):
+    # If the user clicks the "Not Invoice" button, set the global result to False and close the window
     global result
     result = True
     plt.close()
@@ -318,15 +311,19 @@ def main(pdf_path, template_folder, log_file_arg, root_arg):
     for file in glob.glob(rf"{template_folder}\*.txt"):
         try:
             with open(file, "r") as f:
+                # Get the invoice name, date, and number from the template
                 invoice_name = f.readline().split("?")
                 invoice_date = f.readline().split("?")
                 invoice_num = f.readline().split("?")
+                # Get the company name from the invoice
                 identifier = sanitize_filename(get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path))
 
                 # If company name on invoice matches name on template, use that template
                 if invoice_name[0] == identifier:
+                    # Get the invoice date and number from the invoice
                     invoice_date = get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
                     invoice_num = get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
+                    # Clean the invoice date
                     invoice_date = check_outlier(invoice_name[0], invoice_date).replace("/", "-")
 
                     return rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf"
@@ -335,8 +332,7 @@ def main(pdf_path, template_folder, log_file_arg, root_arg):
 
     # If no template exists, make one
     try:
-        # Email me
-        send_email()
+        send_email() #email me
 
         # Draw rectangles on the PDF image for annotation
         doc = fitz.open(pdf_path)
@@ -352,12 +348,11 @@ def main(pdf_path, template_folder, log_file_arg, root_arg):
         plt.subplots_adjust(bottom=0.2)
 
         # Create a button and specify its position and label
-        button_ax = plt.axes([0.7, 0.05, 0.1, 0.075])  # [left, bottom, width, height]
+        button_ax = plt.axes([0.7, 0.05, 0.1, 0.075])  #[left, bottom, width, height]
         button = Button(button_ax, 'Not An Invoice')
 
         # Assign the button_pressed function as the callback when the button is clicked
         button.on_clicked(not_invoice)
-
         ax.imshow(img_array)
 
         # Create an instance of DraggableRectangle and bind it to the axis
@@ -366,6 +361,7 @@ def main(pdf_path, template_folder, log_file_arg, root_arg):
         # Show the plot with the PDF image and rectangles
         plt.show()
 
+        # If the user clicked the "Not An Invoice" button
         if result:
             return "not_invoice"
 
