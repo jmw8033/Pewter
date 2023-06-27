@@ -1,4 +1,5 @@
 import Rectangulator
+import Loginulator
 import win32print
 import threading
 import traceback
@@ -26,17 +27,17 @@ class EmailProcessor:
     RECIEVER_EMAIL = config.RECIEVER_EMAIL
     TRUSTED_ADDRESS = config.TRUSTED_ADDRESS
     ADDRESS = config.ADDRESS
-    WAIT_TIME = 10 #seconds
-    RECONNECT_CYCLE_COUNT = 3600 / WAIT_TIME #1 hour
+    WAIT_TIME = 10 # seconds
+    RECONNECT_CYCLE_COUNT = 3600 / WAIT_TIME # 1 hour
     TESTING = False
 
     def __init__(self, root):
         # VARIABLES
-        self.alert_window = None #used for pop ups
+        self.alert_window = None # used for pop ups
         self.window_closed = None
         self.processor_thread = None
         self.processor_running = False
-        self.pause_event = threading.Event() #used for cycles
+        self.pause_event = threading.Event() # used for cycles
         self.root = root
         self.connected = False
 
@@ -44,39 +45,39 @@ class EmailProcessor:
         self.button_frame = tk.Frame(root)
         self.button_frame.pack(side=tk.TOP)
 
-        self.start_button = tk.Button(self.button_frame, text="Start Process", command=self.main) #start process button
+        self.start_button = tk.Button(self.button_frame, text="Start Process", command=self.main) # start process button
         self.start_button.pack(side=tk.LEFT, padx=1)
 
-        self.pause_button = tk.Button(self.button_frame, text="Pause", command=self.pause_processing, state=tk.DISABLED) #pause button
+        self.pause_button = tk.Button(self.button_frame, text="Pause", command=self.pause_processing, state=tk.DISABLED) # pause button
         self.pause_button.pack(side=tk.LEFT, padx=1)
 
-        self.resume_button = tk.Button(self.button_frame, text="Resume", command=self.resume_processing, state=tk.DISABLED) #resume button
+        self.resume_button = tk.Button(self.button_frame, text="Resume", command=self.resume_processing, state=tk.DISABLED) # resume button
         self.resume_button.pack(side=tk.LEFT, padx=1)
 
-        self.restart_button = tk.Button(self.button_frame, text="Restart", command=self.restart_processing, state=tk.DISABLED) #restart button
+        self.restart_button = tk.Button(self.button_frame, text="Restart", command=self.restart_processing, state=tk.DISABLED) # restart button
         self.restart_button.pack(side=tk.LEFT, padx=1)
 
-        self.log_text_widget = tk.Text(root, height=30, width=140, spacing1=4, padx=0, pady=0) #text label
+        self.log_text_widget = tk.Text(root, height=30, width=140, spacing1=4, padx=0, pady=0) # text label
         self.log_text_widget.pack()
 
         # GUI STYLES
         self.log_text_widget.tag_configure("red", background="#FFCCCC")
         self.log_text_widget.tag_configure("yellow", background="yellow")
         self.log_text_widget.tag_configure("orange", background="#FFB434")	
-        self.log_text_widget.tag_configure("lgreen", background="#CCFFCC")	
-        self.log_text_widget.tag_configure("green", background="#39FF12")	
-        self.log_text_widget.tag_configure("dgreen", background="#00994d")	
+        self.log_text_widget.tag_configure("lgreen", background="#CCFFCC") # light green
+        self.log_text_widget.tag_configure("green", background="#39FF12") # green
+        self.log_text_widget.tag_configure("dgreen", background="#00994d") # dark green
         self.log_text_widget.tag_configure("blue", background="#89CFF0")
         self.log_text_widget.tag_configure("gray", background="#DEDDDD")
-        self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD") #gray
-        self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8) #default
+        self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD") # gray
+        self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8) # default
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) #runs exit protocol on window close
         
     def main(self): # Runs when start button is pressed
         if self.TESTING:
             self.log("Testing mode enabled", tag="orange")
-            
+
         self.log("Connecting...", tag="dgreen")
         self.root.update()
         self.processor_running = True
@@ -101,7 +102,7 @@ class EmailProcessor:
     def connect(self, username, password, log=True): # returns imap object
         user = f"{username}{self.ADDRESS}"
         try:
-            # Log into email
+            # Login to email
             imap = imaplib.IMAP4_SSL(self.IMAP_SERVER)
             imap.login(user, password)
             self.connected = True
@@ -109,8 +110,10 @@ class EmailProcessor:
                 self.log(f"--- Connected to {username} --- {self.current_time} {self.current_date}", tag="dgreen")
             return MYImap(imap, username, password)
         except imaplib.IMAP4_SSL.error as e:
-            self.log(f"Unable to connect to {username}: {str(e)}", tag="red", sender_imap=imap)
-            return
+            if log:
+                self.log(f"Unable to connect to {username}: {str(e)}", tag="red", sender_imap=imap)
+            time.sleep(5)
+            return self.connect(username, password, log=False) # try again after 5 seconds
         
     def disconnect(self, imap, log=True):
         try:
@@ -120,7 +123,10 @@ class EmailProcessor:
             if log:
                 self.log(f"--- Disconnected from {imap.username} --- {self.current_time} {self.current_date}", tag="red")
         except Exception as e:
-            self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", sender_imap=imap)        
+            if log:
+                self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", sender_imap=imap)    
+            time.sleep(5)    
+            self.disconnect(imap, log=False) # try again after 5 seconds
 
     def search_inbox(self, imap): # This is what runs each cycle
         try:
@@ -171,12 +177,10 @@ class EmailProcessor:
             # Check for attachments
             has_attachment = any(part.get("content-disposition", "").startswith("attachment") for part in msg.walk() if msg.is_multipart())
             if not has_attachment:
-                self.log(f"'{subject}' has no attachment, assuming login needed for {imap.username}", tag="yellow")
-                self.move_email(imap, mail, "Need_Login", subject)
-                return 
-            
-            # Handle attachments
-            attachment_error = self.handle_attachments(imap, mail, msg, subject)
+                attachment_error = self.handle_login(imap, mail, msg, subject)
+            else:            
+                # Handle attachments
+                attachment_error = self.handle_attachments(imap, mail, msg, subject)
 
             # Move to invoices label if no errors
             if not attachment_error:
@@ -190,6 +194,25 @@ class EmailProcessor:
             self.move_email(imap, mail, "Errors", subject)
             return
         
+    def handle_login(self, imap, mail, msg, subject): # Handles login emails
+        filepaths = Loginulator.get_filepaths(msg)
+        if not filepaths:
+            self.log(f"Loginulator failed for '{subject}' for {imap.username}", tag="red", sender_imap=imap)
+            self.move_email(imap, mail, "Need_Login", subject)
+            return True
+        
+        for filepath in filepaths:
+            new_filepath = Rectangulator.main(filepath, self.TEMPLATE_FOLDER, self.LOG_FILE2, self)
+            try:
+                # Save invoice
+                os.rename(filepath, new_filepath)
+                self.log(f"Created new invoice file {os.path.basename(new_filepath)} for {imap.username}", tag="blue")
+                self.print_invoice(new_filepath, imap, mail, subject)
+                return False
+            except Exception as e:
+                self.log(f"An error occurred while renaming {filepath} to {new_filepath}: {str(e)}", tag="red", sender_imap=imap)
+                return True
+
     def handle_attachments(self, imap, mail, msg, subject):        # Iterate over email parts and find pdf
         error = False
         for part in msg.walk():
@@ -203,11 +226,7 @@ class EmailProcessor:
                     continue
             
                 if not self.TESTING:
-                    # Check if print is successful
-                    invoice_printed = self.print_invoice(filepath, imap)
-                    if not invoice_printed:
-                        self.move_email(imap, mail, "Need_Print", subject)
-                        continue
+                    self.print_invoice(filepath, imap, mail, subject)
         return error
 
     def download_invoice(self, part, imap):
@@ -251,15 +270,16 @@ class EmailProcessor:
         self.log(f"Created new invoice file {os.path.basename(new_filepath)} for {imap.username}", tag="blue")
         return True, new_filepath
         
-    def print_invoice(self, filepath, imap): # Printer
+    def print_invoice(self, filepath, imap, mail, subject): # Printer
         try:
             # Get default printer and print
             p = win32print.GetDefaultPrinter()
             win32api.ShellExecute(0, "print", filepath, None,  ".",  0)
-            self.log(f"Printed {filepath} completed successfully for {imap.username}.", tag="blue")
+            self.log(f"Printed {os.path.basename(filepath)} completed successfully for {imap.username}.", tag="blue")
             return True
         except Exception as e:
-            self.log(f"Printing failed: {str(e)}", tag="red", sender_email=imap.username)
+            self.move_email(imap, mail, "Need_Print", subject)
+            self.log(f"Printing failed: {str(e)}", tag="red", sender_imap=imap)
             return False
 
     def move_email(self, imap, mail, label, subject): # Moves emails to labels
