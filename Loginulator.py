@@ -23,7 +23,7 @@ class Loginulator:
 
         # Dictionaey where keys are vendor emails and values are functions for specific vendor
         potential_logins = {config.ADP: self.ADP, config.AMEX: self.AMEX, config.DELTA: self.DELTA,
-                            config.UPS: self.UPS,
+                            config.UPS: self.UPS
                             } 
         
         # Check if email is in dictionary and run the corresponding function
