@@ -128,7 +128,7 @@ class EmailProcessor:
             time.sleep(5)    
             self.disconnect(imap, log=False) # try again after 5 seconds
 
-    def search_inbox(self, imap): # This is what runs each cycle
+    def search_inbox(self, imap): # Main Loop - searches inbox for new emails
         try:
             cycle_count = 0
             while self.processor_running:
