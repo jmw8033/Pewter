@@ -1,15 +1,15 @@
 from email.mime.multipart import MIMEMultipart
+from matplotlib.widgets import TextBox
 from matplotlib.patches import Rectangle
 from matplotlib.widgets import Button
 from email.mime.text import MIMEText
+from Alertinator import AlertWindow
 from datetime import datetime
 import matplotlib.pyplot as plt
-import tkinter as tk
 import numpy as np
 import pytesseract
 import traceback
 import threading
-import keyboard
 import smtplib
 import config
 import math
@@ -19,7 +19,8 @@ import re
 import os
 
 pytesseract.pytesseract.tesseract_cmd = config.PYTESSERACT_PATH
-log_file = result = root = None
+invoice = True
+log_file = root = None
 
 
 class Rectangulator:
@@ -39,12 +40,28 @@ class Rectangulator:
         self.start_y = None
         self.rect = None 
         self.zoom_factor = 1.2
+        self.pan_factor = 1
+        self.pan_start = None
+        self.prev_x = None
+        self.prev_y = None
+        self.initial_xlim = self.ax.get_xlim()
+        self.initial_ylim = self.ax.get_ylim()
 
         # Connect the event handlers to the canvas
         self.ax.figure.canvas.mpl_connect('button_press_event', self.on_button_press)
         self.ax.figure.canvas.mpl_connect('button_release_event', self.on_button_release)
         self.ax.figure.canvas.mpl_connect('motion_notify_event', self.on_move)
         self.ax.figure.canvas.mpl_connect('scroll_event', self.on_scroll)
+        self.ax.figure.canvas.mpl_connect('key_press_event', self.on_key_press)  # Add key press event handler
+
+
+    def on_key_press(self, event):
+        if event.key == "escape": # Reset zoom and position
+            self.ax.set_xlim(self.initial_xlim)
+            self.ax.set_ylim(self.initial_ylim)
+            self.pan_start = None
+            self.ax.figure.canvas.draw()
+
 
     def on_button_press(self, event): # Handle left and right mouse button press events
         if event.button == 1:  # Left mouse button
@@ -57,6 +74,10 @@ class Rectangulator:
             self.rect = Rectangle((self.start_x, self.start_y), 0, 0, edgecolor='red', linewidth=2, fill=False)
             self.ax.add_patch(self.rect)
             self.ax.figure.canvas.draw()
+
+        elif event.button == 2: # Middle mouse button
+            self.pan_start = (event.x, event.y)
+
         elif event.button == 3:  # Right mouse button
             # Check if 3 rectangles have been drawn
             if len(self.rectangles) != 3:
@@ -64,48 +85,67 @@ class Rectangulator:
                 self.reset_rectangles()
                 return
             
-            # Show extracted text for verification
-            log("Extracted Text:")
-            headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
-            for i, rect in enumerate(self.rectangles):
-                extracted_text = headers[i] + get_text_in_rect(rect, self.pdf_path)
-                log(extracted_text)
-
             # Ask for verifictaion
             def handle_user_input():
-                while True:
-                    print("Does the following text match what you selected? (press y/n): ")
-                    choice = keyboard.read_event()
-                    if choice.event_type == "down":
-                        if choice.name.lower() == "y":
-                            plt.close(self.fig)
-                            break
-                        elif choice.name.lower() == "n":
-                            log("Please reselect rectangles")
-                            self.reset_rectangles()
-                            break
-                        else:
-                            log("Invalid choice. Please enter 'y' or 'n'.")
+                 # Show extracted text for verification
+                headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
+                extracted_text = ""
+                for i, rect in enumerate(self.rectangles):
+                    extracted_text += (headers[i] + get_text_in_rect(rect, self.pdf_path) + "\n")
+                answer_window = AlertWindow(f"Does the following text match what you selected?\n\n{extracted_text}")
+                answer = answer_window.get_answer()
+
+                # If user says yes, close the window
+                if answer == True:
+                    plt.close(self.fig)
+                else:
+                    log("Please reselect rectangles")
+                    self.reset_rectangles()
 
             input_thread = threading.Thread(target=handle_user_input)
             input_thread.start()
          
-    def on_button_release(self, event): # Save rectangle coordinates
-        if event.button != 1 or self.rect is None:
-            return
-        self.start_x = None
-        self.start_y = None
 
-        # Append rectangle and coordinated to list
-        self.rectangles.append(self.rect)
-        self.coordinates.append((self.rect.get_x(), self.rect.get_y(), self.rect.get_width(), self.rect.get_height()))  # Store coordinates
-        self.rect = None
-        self.ax.figure.canvas.draw()
+    def on_button_release(self, event): # Save rectangle coordinates
+        if event.button == 1 and self.rect:  # Left mouse button
+            self.start_x = None
+            self.start_y = None
+
+            # Append rectangle and coordinated to list
+            self.rectangles.append(self.rect)
+            self.coordinates.append((self.rect.get_x(), self.rect.get_y(), self.rect.get_width(), self.rect.get_height()))  # Store coordinates
+            self.rect = None
+            self.ax.figure.canvas.draw()
+
+        elif event.button == 2: # Middle mouse button
+            self.pan_start = None
+            self.prev_x = None
+            self.prev_y = None
+
 
     def on_move(self, event): # Continuously update drawn rectangle
-        if self.rect is None or self.start_x is None or self.start_y is None:
+        # Pan if middle mouse button is pressed
+        if event.button == 2 and self.pan_start:
+            if self.prev_x is not None and self.prev_y is not None:
+                dx = (event.x - self.prev_x) * self.pan_factor
+                dy = (event.y - self.prev_y) * self.pan_factor
+
+                xlim = self.ax.get_xlim()
+                ylim = self.ax.get_ylim()
+                new_xlim = xlim[0] - dx, xlim[1] - dx
+                new_ylim = ylim[0] + dy, ylim[1] + dy
+
+                self.ax.set_xlim(new_xlim)
+                self.ax.set_ylim(new_ylim)
+                self.ax.figure.canvas.draw_idle()
+            
+            self.prev_x = event.x
+            self.prev_y = event.y
             return
         
+        if self.rect is None or self.start_x is None or self.start_y is None:
+            return
+
         current_x = event.xdata
         current_y = event.ydata
         # If outside plot area, set to 0
@@ -123,11 +163,13 @@ class Rectangulator:
         self.rect.set_height(height)
         self.ax.figure.canvas.draw()
 
+
     def on_scroll(self, event): # Zoom in and out
         if event.button == 'down':
             self.zoom(event.xdata, event.ydata, 1 / self.zoom_factor)
         elif event.button == 'up':
             self.zoom(event.xdata, event.ydata, self.zoom_factor)
+
 
     def reset_rectangles(self): # Reset the current rectangles
         for rect in self.rectangles:
@@ -136,6 +178,7 @@ class Rectangulator:
         self.coordinates = []
         self.rect = None  
         self.ax.figure.canvas.draw()
+
 
     def zoom(self, x, y, zoom_factor):
         # Perform zooming based on scroll event
@@ -155,6 +198,7 @@ class Rectangulator:
         self.ax.set_xlim(new_xlim)
         self.ax.set_ylim(new_ylim)
         self.ax.figure.canvas.draw()
+
 
     def rename_pdf(self):
         try:
@@ -176,6 +220,7 @@ class Rectangulator:
             log(f"Error occurred with download, {str(e)}")
             return None
         
+
     def save_template(self):
         # Save the template to a text file as Company Name?x?y?width?height and so on
         for i, coord in enumerate(self.coordinates):
@@ -194,6 +239,7 @@ class Rectangulator:
 def sanitize_filename(filename): # Remove invalid characters from the filename
     sanitized_filename = re.sub(r'[^\w_. -]', '', filename.replace('/', '-'))
     return sanitized_filename.strip()
+
 
 def get_text_in_rect(rect, pdf_path):
     try:
@@ -238,6 +284,7 @@ def get_text_in_rect(rect, pdf_path):
     finally:
         doc.close()
 
+
 def check_outlier(invoice_name, invoice_date):
     calendar = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04", "May": "05", "Jun": "06", "Jul": "07", "Aug": "08", "Sep": "09", "Oct": "10", "Nov": "11", 'Dec': "12"}
     if invoice_name == "BUZZI UNICEM USA - Cement":
@@ -255,6 +302,7 @@ def check_outlier(invoice_name, invoice_date):
     
     return clean_date(invoice_date)
 
+
 def clean_date(invoice_date):
     try:
         date = datetime.strptime(invoice_date, "%m/%d/%y")
@@ -266,45 +314,50 @@ def clean_date(invoice_date):
         except ValueError:
             return invoice_date
     
+
 def log(*args):
     global log_file
     global root
     with open(log_file, "a") as file:
         message = "#RECTANGULATOR# " + ' '.join([str(arg) for arg in args]) 
-        print(message)
+        if root:
+            root.log(message, tag="pink")
         file.write('\n'.join([str(arg) for arg in args]))
+        print(message)
+
 
 def send_email():
     try:
         sender_email = f"{config.ACP_USER}{config.ADDRESS}"
-        reciever_email = config.RECIEVER_EMAIL
 
         # Create a multipart message
         message = MIMEMultipart()
         message["Subject"] = "Must create template"
         message["From"] = sender_email
-        message["To"] = reciever_email
+        message["To"] = config.RECIEVER_EMAIL
         message.attach(MIMEText("Must create template", "plain"))
 
         # Send the email
         with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
             server.starttls()
             server.login(sender_email, config.ACP_PASS)
-            server.sendmail(sender_email, reciever_email, message.as_string())
-            log(f"Template request sent from {sender_email} to {reciever_email}")
+            server.sendmail(sender_email, config.RECIEVER_EMAIL, message.as_string())
+            log(f"Template request sent from {sender_email} to {config.RECIEVER_EMAIL}")
     except Exception as e:
             log(f"Error sending email from {sender_email} - {str(e)}")
 
+
 def not_invoice(event):
-    # If the user clicks the "Not Invoice" button, set the global result to False and close the window
-    global result
-    result = True
+    # If the user clicks the "Not Invoice" button, set the global not_invoice to False and close the window
+    global invoice
+    invoice = False
     plt.close()
 
-def main(pdf_path, template_folder, log_file_arg, root_arg):
+
+def main(pdf_path, root_arg, template_folder):
     global log_file
     global root
-    log_file = log_file_arg
+    log_file = config.LOG_FILE
     root = root_arg
 
     # Iterate through invoice templates and check for one that matches the invoice
@@ -344,30 +397,47 @@ def main(pdf_path, template_folder, log_file_arg, root_arg):
         img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
 
         # Create a matplotlib figure and axis for displaying the image
-        fig, ax = plt.subplots(figsize=(8, 8))
+        fig, ax = plt.subplots(figsize=(9, 9))
         plt.subplots_adjust(bottom=0.2)
-
-        # Create a button and specify its position and label
-        button_ax = plt.axes([0.7, 0.05, 0.1, 0.075])  #[left, bottom, width, height]
-        button = Button(button_ax, 'Not An Invoice')
-
-        # Assign the button_pressed function as the callback when the button is clicked
-        button.on_clicked(not_invoice)
         ax.imshow(img_array)
+
+        # Create a Not An Invoice button
+        button = Button(plt.axes([0.65, 0.05, 0.2, 0.075]), 'Not An Invoice')
+        button.on_clicked(not_invoice)
+
+        def on_text_submit(text):
+            answer_window = AlertWindow(f"Is '{text_box.text}' the correct filename?")
+            answer = answer_window.get_answer()
+            if answer == True:
+                plt.close()
+
+        # Create a text box to manually enter filename
+        text_box = TextBox(plt.axes([0.1, 0.05, 0.45, 0.075]), label="", initial="")
+        text_box.on_submit(on_text_submit)
+        text_box_label = fig.text(0.2, 0.14, "Enter Filename (mm-dd-yy_invoice#)", fontsize=10)
+        submit_button = Button(plt.axes([0.45, 0.05, 0.15, 0.075]), "Submit")
+        submit_button.on_clicked(on_text_submit)
 
         # Create an instance of DraggableRectangle and bind it to the axis
         draggable_rect = Rectangulator(ax, fig, pdf_path, template_folder)
 
         # Show the plot with the PDF image and rectangles
         plt.show()
-
-        # If the user clicked the "Not An Invoice" button
-        if result:
+    
+        
+        if not invoice:#  If the user clicked the "Not An Invoice" button
             return "not_invoice"
+        filename = draggable_rect.rename_pdf()
+        if filename: # If the user dragged a rectangle
+            return filename
+        elif text_box.text: # If the user entered a filename
+            return text_box.text
 
-        # Return the new filename created by renaming the PDF
-        return draggable_rect.rename_pdf()
+
     except Exception as e:
         log(f"An error occurred while drawing rectangles: {str(e)}")
 
     return None
+
+if __name__ == "__main__":
+    print(main(r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Invoice_63133_from_Hart_Fueling_Services.pdf", None, r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Test"))

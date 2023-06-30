@@ -11,10 +11,13 @@ import email
 import time
 import os
 import tkinter as tk
+from Alertinator import AlertWindow
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 class EmailProcessor:
+    TESTING = False
+    
     # CONSTANTS
     LOG_FILE = config.LOG_FILE
     LOG_FILE2 = config.LOG_FILE2
@@ -29,7 +32,10 @@ class EmailProcessor:
     ADDRESS = config.ADDRESS
     WAIT_TIME = 10 # seconds
     RECONNECT_CYCLE_COUNT = 3600 / WAIT_TIME # 1 hour
-    TESTING = False
+    if TESTING:   
+        TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
+        INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
+
 
     def __init__(self, root):
         # VARIABLES
@@ -68,12 +74,14 @@ class EmailProcessor:
         self.log_text_widget.tag_configure("green", background="#39FF12") # green
         self.log_text_widget.tag_configure("dgreen", background="#00994d") # dark green
         self.log_text_widget.tag_configure("blue", background="#89CFF0")
+        self.log_text_widget.tag_configure("purple", background="#E6E6FA")
         self.log_text_widget.tag_configure("gray", background="#DEDDDD")
         self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD") # gray
         self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8) # default
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) #runs exit protocol on window close
         
+
     def main(self): # Runs when start button is pressed
         if self.TESTING:
             self.log("Testing mode enabled", tag="orange")
@@ -99,6 +107,7 @@ class EmailProcessor:
             self.processor_thread = threading.Thread(target=self.search_inbox, args=[self.imap_apc])
             self.processor_thread.start()
 
+
     def connect(self, username, password, log=True): # returns imap object
         user = f"{username}{self.ADDRESS}"
         try:
@@ -115,6 +124,7 @@ class EmailProcessor:
             time.sleep(5)
             return self.connect(username, password, log=False) # try again after 5 seconds
         
+
     def disconnect(self, imap, log=True):
         try:
             # Logout
@@ -127,6 +137,7 @@ class EmailProcessor:
                 self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", sender_imap=imap)    
             time.sleep(5)    
             self.disconnect(imap, log=False) # try again after 5 seconds
+
 
     def search_inbox(self, imap): # Main Loop - searches inbox for new emails
         try:
@@ -158,6 +169,8 @@ class EmailProcessor:
             self.disconnect(imap)
         except Exception as e:  
             self.log(f"An error occurred while searching the inbox for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
+            self.restart_processing(imap)
+
 
     def process_email(self, imap, mail): # Handles each email
         subject = ""
@@ -194,6 +207,7 @@ class EmailProcessor:
             self.move_email(imap, mail, "Errors", subject)
             return
         
+
     def handle_login(self, imap, mail, msg, subject): # Handles login emails
         filepaths = Loginulator.get_filepaths(msg)
         if not filepaths:
@@ -202,7 +216,7 @@ class EmailProcessor:
             return True
         
         for filepath in filepaths:
-            new_filepath = Rectangulator.main(filepath, self.TEMPLATE_FOLDER, self.LOG_FILE2, self)
+            new_filepath = Rectangulator.main(filepath, self, self.TEMPLATE_FOLDER)
             try:
                 # Save invoice
                 os.rename(filepath, new_filepath)
@@ -212,6 +226,7 @@ class EmailProcessor:
             except Exception as e:
                 self.log(f"An error occurred while renaming {filepath} to {new_filepath}: {str(e)}", tag="red", sender_imap=imap)
                 return True
+
 
     def handle_attachments(self, imap, mail, msg, subject):        # Iterate over email parts and find pdf
         error = False
@@ -228,6 +243,7 @@ class EmailProcessor:
                 if not self.TESTING:
                     self.print_invoice(filepath, imap, mail, subject)
         return error
+
 
     def download_invoice(self, part, imap):
         # Get fllename and attachment
@@ -246,7 +262,7 @@ class EmailProcessor:
             file.write(attachment)
 
         # Prompt user to draw rectangles
-        new_filepath = Rectangulator.main(filepath, self.TEMPLATE_FOLDER, self.LOG_FILE2, self)
+        new_filepath = Rectangulator.main(filepath, self, self.TEMPLATE_FOLDER)
 
         # Check if not invoice
         if new_filepath == "not_invoice":
@@ -270,6 +286,7 @@ class EmailProcessor:
         self.log(f"Created new invoice file {os.path.basename(new_filepath)} for {imap.username}", tag="blue")
         return True, new_filepath
         
+
     def print_invoice(self, filepath, imap, mail, subject): # Printer
         try:
             # Get default printer and print
@@ -282,6 +299,7 @@ class EmailProcessor:
             self.log(f"Printing failed: {str(e)}", tag="red", sender_imap=imap)
             return False
 
+
     def move_email(self, imap, mail, label, subject): # Moves emails to labels
         try:
             # Make a copy of the email in the specified label
@@ -293,6 +311,7 @@ class EmailProcessor:
             self.log(f"Email '{subject}' moved to {label} for {imap.username}.", tag="blue")
         except Exception as e:
             self.log(f"Email '{subject}' transfer failed for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
+
 
     def send_email(self, imap, subject, body):
         try:
@@ -313,6 +332,7 @@ class EmailProcessor:
                 self.log(f"Email from {imap.username} sent to {self.RECIEVER_EMAIL}", tag="gray")
         except Exception as e:
                 self.log(f"Error sending email from {imap.username} - {str(e)}", tag="red")
+
 
     def log(self, *args, tag=None, sender_imap=None): # Logs to text box and log file
         try:
@@ -338,6 +358,7 @@ class EmailProcessor:
         except Exception as e:
             print(f"Error logging: {str(e)}")
 
+
     def check_labels(self, imap, labels): # Checks for emails that need to be looked at in labels
         for label in labels:
             try:
@@ -352,6 +373,7 @@ class EmailProcessor:
             except Exception as e:
                 self.log(f"An error occurred while checking the label for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
     
+
     def remove_messages(self, message): # Removes no_new_emails messages
         message = message[:-22] #cuts out the date-time
 
@@ -362,12 +384,14 @@ class EmailProcessor:
             index = self.log_text_widget.search(message, "1.0", tk.END)
             self.root.update()
 
+
     def pause_processing(self): # Pauses processing
         self.pause_event.set()
         self.log("Processing paused.", tag="yellow")
         self.pause_button.config(state=tk.DISABLED)
         self.resume_button.config(state=tk.NORMAL)
         self.restart_button.config(state=tk.DISABLED)
+
 
     def resume_processing(self): # Resumes processing
         self.pause_event.clear()
@@ -376,16 +400,19 @@ class EmailProcessor:
         self.resume_button.config(state=tk.DISABLED)
         self.restart_button.config(state=tk.NORMAL)
 
+
     def restart_processing(self): # Restarts processing
         self.log("Restarting...", tag="orange")
         self.processor_running = False
         self.main()
+
 
     def reconnect(self, imap): # Reconnects to imap
         self.disconnect(imap, log=False)
         imap = self.connect(imap.username, imap.password, log=False)
         self.log(f"Reconnected to {imap.username} - {self.current_time} {self.current_date}", tag="green")
         return imap
+
 
     def on_program_exit(self): # Runs when program is closed
         self.log("Disconnecting...", tag="red")
@@ -405,16 +432,19 @@ class EmailProcessor:
         # Destroys tkinter window 
         self.root.destroy()
 
+
     def show_alert(self, *args): # Create Yes/No popup window
         message = ' '.join([str(arg) for arg in args])
-        self.alert_window = AlertWindow(self.root, message)
-        self.root.wait_window(self.alert_window)
-        return self.alert_window.choice
+        alert_window = AlertWindow(message)
+        answer = alert_window.get_answer()
+        return answer
+        
 
     @property
     def current_time(self):
         return time.strftime("%H:%M:%S", time.localtime())
     
+
     @property
     def current_date(self):
         return time.strftime("%Y-%m-%d", time.localtime())
@@ -425,33 +455,7 @@ class MYImap:
         self.imap = imap
         self.username = username
         self.password = password
-
-
-class AlertWindow(tk.Toplevel):
-
-    def __init__(self, parent, message):
-        super().__init__(parent)
-        self.title("Alert")
-        self.geometry("300x100")
-        self.choice = None
-
-        label = tk.Label(self, text=message, wraplength=250) # text label
-        label.pack(padx=20, pady=20)
-
-        yes_button = tk.Button(self, text="Yes", command=self.on_yes_button_click) # yes button
-        yes_button.pack(side=tk.LEFT)
-
-        no_button = tk.Button(self, text="No", command=self.on_no_button_click) # no button
-        no_button.pack(side=tk.LEFT)
-
-    def on_yes_button_click(self):
-        self.choice = True
-        self.destroy()
-
-    def on_no_button_click(self):
-        self.choice = False
-        self.destroy()
-
+    
 
 if __name__ == "__main__":
     # Get app icon       
