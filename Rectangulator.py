@@ -22,7 +22,6 @@ pytesseract.pytesseract.tesseract_cmd = config.PYTESSERACT_PATH
 invoice = True
 log_file = root = None
 
-
 class Rectangulator:
 
     def __init__(self, ax, fig, pdf_path, template_folder):

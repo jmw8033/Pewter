@@ -52,9 +52,6 @@ class EmailProcessor:
         self.pause_button = tk.Button(self.button_frame, text="Pause", command=self.pause_processing, state=tk.DISABLED) # pause button
         self.pause_button.pack(side=tk.LEFT, padx=1)
 
-        self.resume_button = tk.Button(self.button_frame, text="Resume", command=self.resume_processing, state=tk.DISABLED) # resume button
-        self.resume_button.pack(side=tk.LEFT, padx=1)
-
         self.restart_button = tk.Button(self.button_frame, text="Restart", command=self.restart_processing, state=tk.DISABLED) # restart button
         self.restart_button.pack(side=tk.LEFT, padx=1)
 
@@ -90,7 +87,8 @@ class EmailProcessor:
 
         # Enable and disable buttons
         self.start_button.config(state=tk.DISABLED) 
-        self.pause_button.config(state=tk.NORMAL)
+        self.pause_button.config(text="Pause", command=self.pause_processing, state=tk.NORMAL)
+        self.pause_event.clear()
         self.restart_button.config(state=tk.NORMAL)
         
         # ACP login
@@ -384,19 +382,14 @@ class EmailProcessor:
 
 
     def pause_processing(self): # Pauses processing
-        self.pause_event.set()
         self.log("Processing paused.", tag="yellow")
-        self.pause_button.config(state=tk.DISABLED)
-        self.resume_button.config(state=tk.NORMAL)
-        self.restart_button.config(state=tk.DISABLED)
-
+        self.pause_button.config(text="Resume", command=self.resume_processing)
+        self.pause_event.set()
 
     def resume_processing(self): # Resumes processing
-        self.pause_event.clear()
         self.log("Processing resumed.", tag="yellow")
-        self.pause_button.config(state=tk.NORMAL)
-        self.resume_button.config(state=tk.DISABLED)
-        self.restart_button.config(state=tk.NORMAL)
+        self.pause_button.config(text="Pause", command=self.pause_processing)
+        self.pause_event.clear()
 
 
     def restart_processing(self): # Restarts processing
