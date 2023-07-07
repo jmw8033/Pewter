@@ -41,6 +41,8 @@ class EmailProcessor:
         self.pause_event = threading.Event() # used for cycles
         self.root = root
         self.connected = False
+        self.logging_out = False
+        self.TESTING = False # default to false
 
         # GUI BUTTONS
         self.button_frame = tk.Frame(root)
@@ -52,8 +54,11 @@ class EmailProcessor:
         self.pause_button = tk.Button(self.button_frame, text="Pause", command=self.pause_processing, state=tk.DISABLED) # pause button
         self.pause_button.pack(side=tk.LEFT, padx=1)
 
-        self.restart_button = tk.Button(self.button_frame, text="Restart", command=self.restart_processing, state=tk.DISABLED) # restart button
-        self.restart_button.pack(side=tk.LEFT, padx=1)
+        self.logout_button = tk.Button(self.button_frame, text="Logout", command=self.logout, state=tk.DISABLED) # restart button
+        self.logout_button.pack(side=tk.LEFT, padx=1)
+
+        self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
+        self.testing_button.pack(side=tk.LEFT, padx=1)
 
         self.log_text_widget = tk.Text(root, height=30, width=140, spacing1=4, padx=0, pady=0) # text label
         self.log_text_widget.pack()
@@ -74,8 +79,7 @@ class EmailProcessor:
         self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) # runs exit protocol on window close
         
 
-    def main(self): # Runs when start button is pressed
-        self.TESTING = AlertWindow("Would you like to run in test mode?").get_answer()   
+    def main(self): # Runs when start button is pressed 
         if self.TESTING:
             self.TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
             self.INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
@@ -89,9 +93,8 @@ class EmailProcessor:
         self.start_button.config(state=tk.DISABLED) 
         self.pause_button.config(text="Pause", command=self.pause_processing, state=tk.NORMAL)
         self.pause_event.clear()
-        self.pause_button.config(text="Pause", command=self.pause_processing, state=tk.NORMAL)
-        self.pause_event.clear()
-        self.restart_button.config(state=tk.NORMAL)
+        self.logout_button.config(state=tk.NORMAL)
+        self.testing_button.config(state=tk.DISABLED)
         
         # ACP login
         self.imap_acp = self.connect(self.ACP_USER, self.ACP_PASS)
@@ -165,6 +168,10 @@ class EmailProcessor:
                         cycle_count = 0
             # Disconnect when the program is closed
             self.disconnect(imap)
+            if self.logging_out:
+                self.logging_out = False
+                self.start_button.config(state=tk.NORMAL)
+                self.testing_button.config(state=tk.NORMAL)
         except Exception as e:  
             self.log(f"An error occurred while searching the inbox for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
             self.restart_processing(imap)
@@ -313,6 +320,9 @@ class EmailProcessor:
 
     def send_email(self, imap, subject, body):
         try:
+            if self.TESTING:
+                return 
+            
             sender_email = f"{imap.username}{self.ADDRESS}"
 
             # Create a multipart message and set headers
@@ -394,11 +404,29 @@ class EmailProcessor:
         self.pause_button.config(text="Pause", command=self.pause_processing)
         self.pause_event.clear()
 
-
+ 
     def restart_processing(self): # Restarts processing
         self.log("Restarting...", tag="orange")
         self.processor_running = False
-        self.main()
+        self.pause_button.config(text="Pause", command=self.pause_processing)
+
+   
+    def logout(self): # Logs out
+        self.log("Logging out...", tag="orange")
+        self.pause_button.config(state=tk.DISABLED)
+        self.logout_button.config(state=tk.DISABLED)
+        self.pause_event.set()
+        self.processor_running = False
+        self.logging_out = True
+
+   
+    def testing(self):
+        if self.TESTING:
+            self.TESTING = False
+            self.testing_button.config(bg="#FFCCCC")
+        else:
+            self.TESTING = True
+            self.testing_button.config(bg="#CCFFCC")
 
 
     def reconnect(self, imap): # Reconnects to imap
