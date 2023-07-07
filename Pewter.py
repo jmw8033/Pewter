@@ -89,6 +89,8 @@ class EmailProcessor:
         self.start_button.config(state=tk.DISABLED) 
         self.pause_button.config(text="Pause", command=self.pause_processing, state=tk.NORMAL)
         self.pause_event.clear()
+        self.pause_button.config(text="Pause", command=self.pause_processing, state=tk.NORMAL)
+        self.pause_event.clear()
         self.restart_button.config(state=tk.NORMAL)
         
         # ACP login
