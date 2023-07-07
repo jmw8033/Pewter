@@ -30,7 +30,7 @@ class EmailProcessor:
     ADDRESS = config.ADDRESS
     WAIT_TIME = 10 # seconds
     RECONNECT_TIME = 3600 # 1 hour
-    RECCONNECT_CYCLE_COUNT = RECONNECT_TIME // WAIT_TIME
+    RECONNECT_CYCLE_COUNT = RECONNECT_TIME // WAIT_TIME
 
     def __init__(self, root):
         # VARIABLES
