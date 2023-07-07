@@ -19,7 +19,6 @@ class EmailProcessor:
 
     # CONSTANTS
     LOG_FILE = config.LOG_FILE
-    LOG_FILE2 = config.LOG_FILE2
     TEMPLATE_FOLDER = config.TEMPLATE_FOLDER
     INVOICE_FOLDER = config.INVOICE_FOLDER
     ACP_USER, ACP_PASS = config.ACP_USER, config.ACP_PASS
@@ -30,7 +29,8 @@ class EmailProcessor:
     TRUSTED_ADDRESS = config.TRUSTED_ADDRESS
     ADDRESS = config.ADDRESS
     WAIT_TIME = 10 # seconds
-    RECONNECT_CYCLE_COUNT = 3600 / WAIT_TIME # 1 hour
+    RECONNECT_TIME = 3600 # 1 hour
+    RECCONNECT_CYCLE_COUNT = RECONNECT_TIME // WAIT_TIME
 
     def __init__(self, root):
         # VARIABLES
@@ -52,9 +52,6 @@ class EmailProcessor:
         self.pause_button = tk.Button(self.button_frame, text="Pause", command=self.pause_processing, state=tk.DISABLED) # pause button
         self.pause_button.pack(side=tk.LEFT, padx=1)
 
-        self.resume_button = tk.Button(self.button_frame, text="Resume", command=self.resume_processing, state=tk.DISABLED) # resume button
-        self.resume_button.pack(side=tk.LEFT, padx=1)
-
         self.restart_button = tk.Button(self.button_frame, text="Restart", command=self.restart_processing, state=tk.DISABLED) # restart button
         self.restart_button.pack(side=tk.LEFT, padx=1)
 
@@ -74,7 +71,7 @@ class EmailProcessor:
         self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD") # gray
         self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8) # default
 
-        self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) #runs exit protocol on window close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) # runs exit protocol on window close
         
 
     def main(self): # Runs when start button is pressed
@@ -90,7 +87,8 @@ class EmailProcessor:
 
         # Enable and disable buttons
         self.start_button.config(state=tk.DISABLED) 
-        self.pause_button.config(state=tk.NORMAL)
+        self.pause_button.config(text="Pause", command=self.pause_processing, state=tk.NORMAL)
+        self.pause_event.clear()
         self.restart_button.config(state=tk.NORMAL)
         
         # ACP login
@@ -384,19 +382,15 @@ class EmailProcessor:
 
 
     def pause_processing(self): # Pauses processing
-        self.pause_event.set()
         self.log("Processing paused.", tag="yellow")
-        self.pause_button.config(state=tk.DISABLED)
-        self.resume_button.config(state=tk.NORMAL)
-        self.restart_button.config(state=tk.DISABLED)
+        self.pause_button.config(text="Resume", command=self.resume_processing)
+        self.pause_event.set()
 
 
     def resume_processing(self): # Resumes processing
-        self.pause_event.clear()
         self.log("Processing resumed.", tag="yellow")
-        self.pause_button.config(state=tk.NORMAL)
-        self.resume_button.config(state=tk.DISABLED)
-        self.restart_button.config(state=tk.NORMAL)
+        self.pause_button.config(text="Pause", command=self.pause_processing)
+        self.pause_event.clear()
 
 
     def restart_processing(self): # Restarts processing
@@ -449,10 +443,8 @@ class MYImap:
     
 
 if __name__ == "__main__":
-    # Get app icon       
-    icon_path = os.path.join(os.path.dirname(__file__), "hotpot.ico")   
-
     # Setup gui
+    icon_path = os.path.join(os.path.dirname(__file__), "hotpot.ico")   
     root = tk.Tk()
     root.title("Pewter")
     root.iconbitmap(icon_path)

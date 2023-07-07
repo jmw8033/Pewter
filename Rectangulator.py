@@ -22,7 +22,6 @@ pytesseract.pytesseract.tesseract_cmd = config.PYTESSERACT_PATH
 invoice = True
 log_file = root = None
 
-
 class Rectangulator:
 
     def __init__(self, ax, fig, pdf_path, template_folder):
@@ -434,6 +433,7 @@ def main(pdf_path, root_arg, template_folder):
         log(f"An error occurred while drawing rectangles: {str(e)}")
 
     return None
+
 
 if __name__ == "__main__":
     print(main(r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Test\06-30-23_36229.pdf", None, r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Test"))
