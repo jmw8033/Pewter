@@ -11,7 +11,7 @@ Because downloading things is a pain.
 ## How's it do it?
 It first connects to the emails (I use two emails for super secret reasons), then waits for an email, and if it gets one from a trusted email, it downloads the attachments.
 Then using the Rectangulator (trademarked) it saves a template containing where in the PDF the name of the company, invoice date, and invoice number are saved, so that
-when an invoice is recieved from that same company, it can correctly name it on its own (we name invoices in the format mm-dd-yy_invoice#). It also prints it to the default printer.
+when an invoice is recieved from that same company, it can correctly name it on its own (I name invoices in the format mm-dd-yy_invoice#). It also prints it to the default printer.
 
 ## Configuration
 The program is currently really only built to be used for my specific purpose, but if you wanted to use it for your own project, the only code you would really have to modify
