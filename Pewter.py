@@ -16,8 +16,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 class EmailProcessor:
-    TESTING = False
-    
+
     # CONSTANTS
     LOG_FILE = config.LOG_FILE
     LOG_FILE2 = config.LOG_FILE2
@@ -32,10 +31,6 @@ class EmailProcessor:
     ADDRESS = config.ADDRESS
     WAIT_TIME = 10 # seconds
     RECONNECT_CYCLE_COUNT = 3600 / WAIT_TIME # 1 hour
-    if TESTING:   
-        TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
-        INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
-
 
     def __init__(self, root):
         # VARIABLES
@@ -83,7 +78,10 @@ class EmailProcessor:
         
 
     def main(self): # Runs when start button is pressed
+        self.TESTING = AlertWindow("Would you like to run in test mode?").get_answer()   
         if self.TESTING:
+            self.TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
+            self.INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
             self.log("Testing mode enabled", tag="orange")
 
         self.log("Connecting...", tag="dgreen")
@@ -346,7 +344,7 @@ class EmailProcessor:
             
             # Insert the new message to the text widget
             self.log_text_widget.insert(tk.END, message + "\n", (tag, "default"))
-            self.log_text_widget.see(tk.END)  #scroll to the end of the text widget   
+            self.log_text_widget.see(tk.END)
 
             # Send email for errors
             if tag == "red" and sender_imap:
@@ -432,13 +430,6 @@ class EmailProcessor:
         # Destroys tkinter window 
         self.root.destroy()
 
-
-    def show_alert(self, *args): # Create Yes/No popup window
-        message = ' '.join([str(arg) for arg in args])
-        alert_window = AlertWindow(message)
-        answer = alert_window.get_answer()
-        return answer
-        
 
     @property
     def current_time(self):

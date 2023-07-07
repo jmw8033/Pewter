@@ -92,11 +92,10 @@ class Rectangulator:
                 extracted_text = ""
                 for i, rect in enumerate(self.rectangles):
                     extracted_text += (headers[i] + get_text_in_rect(rect, self.pdf_path) + "\n")
-                answer_window = AlertWindow(f"Does the following text match what you selected?\n\n{extracted_text}")
-                answer = answer_window.get_answer()
+                text_is_correct = AlertWindow(f"Does the following text match what you selected?\n\n{extracted_text}").get_answer()
 
                 # If user says yes, close the window
-                if answer == True:
+                if text_is_correct:
                     plt.close(self.fig)
                 else:
                     log("Please reselect rectangles")
@@ -321,7 +320,7 @@ def log(*args):
     with open(log_file, "a") as file:
         message = "#RECTANGULATOR# " + ' '.join([str(arg) for arg in args]) 
         if root:
-            root.log(message, tag="pink")
+            root.log(message, tag="purple")
         file.write('\n'.join([str(arg) for arg in args]))
         print(message)
 
@@ -406,9 +405,8 @@ def main(pdf_path, root_arg, template_folder):
         button.on_clicked(not_invoice)
 
         def on_text_submit(text):
-            answer_window = AlertWindow(f"Is '{text_box.text}' the correct filename?")
-            answer = answer_window.get_answer()
-            if answer == True:
+            filename_is_correct = AlertWindow(f"Is '{text_box.text}' the correct filename?").get_answer()
+            if filename_is_correct:
                 plt.close()
 
         # Create a text box to manually enter filename
@@ -424,15 +422,13 @@ def main(pdf_path, root_arg, template_folder):
         # Show the plot with the PDF image and rectangles
         plt.show()
     
-        
         if not invoice:#  If the user clicked the "Not An Invoice" button
             return "not_invoice"
         filename = draggable_rect.rename_pdf()
         if filename: # If the user dragged a rectangle
             return filename
         elif text_box.text: # If the user entered a filename
-            return text_box.text
-
+            return os.path.join(os.path.dirname(pdf_path), f"{text_box.text}.pdf")
 
     except Exception as e:
         log(f"An error occurred while drawing rectangles: {str(e)}")
@@ -440,4 +436,4 @@ def main(pdf_path, root_arg, template_folder):
     return None
 
 if __name__ == "__main__":
-    print(main(r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Invoice_63133_from_Hart_Fueling_Services.pdf", None, r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Test"))
+    print(main(r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Test\06-30-23_36229.pdf", None, r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Test"))
