@@ -54,7 +54,7 @@ class EmailProcessor:
         self.pause_button = tk.Button(self.button_frame, text="Pause", command=self.pause_processing, state=tk.DISABLED) # pause button
         self.pause_button.pack(side=tk.LEFT, padx=1)
 
-        self.logout_button = tk.Button(self.button_frame, text="Logout", command=self.logout, state=tk.DISABLED) # restart button
+        self.logout_button = tk.Button(self.button_frame, text="Logout", command=self.logout, state=tk.DISABLED) # logout button
         self.logout_button.pack(side=tk.LEFT, padx=1)
 
         self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
@@ -174,7 +174,7 @@ class EmailProcessor:
                 self.testing_button.config(state=tk.NORMAL)
         except Exception as e:  
             self.log(f"An error occurred while searching the inbox for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
-            self.restart_processing(imap)
+            self.restart_processing()
 
 
     def process_email(self, imap, mail): # Handles each email
