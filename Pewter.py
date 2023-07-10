@@ -409,6 +409,7 @@ class EmailProcessor:
         self.log("Restarting...", tag="orange")
         self.processor_running = False
         self.pause_button.config(text="Pause", command=self.pause_processing)
+        self.main()
 
    
     def logout(self): # Logs out
