@@ -285,6 +285,7 @@ def get_text_in_rect(rect, pdf_path):
 
 def check_outlier(invoice_name, invoice_date):
     calendar = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04", "May": "05", "Jun": "06", "Jul": "07", "Aug": "08", "Sep": "09", "Oct": "10", "Nov": "11", 'Dec': "12"}
+    calendar2 = {"January": "01", "February": "02", "March": "03", "April": "04", "May": "05", "June": "06", "July": "07", "Aug": "08", "September": "09", "October": "10", "November": "11", 'December': "12"}
     if invoice_name == "BUZZI UNICEM USA - Cement":
         # Uses format "DD-Month-YY"
         invoice_date = invoice_date.split("-")
@@ -292,8 +293,13 @@ def check_outlier(invoice_name, invoice_date):
         invoice_date[0] = calendar[invoice_date[1]]
         invoice_date[1] = day
         return "-".join(invoice_date)
-    elif invoice_name in {"ADP SCREENING  SELECTION SERVICES", "Muka Development Group Llc"}:
+    elif invoice_name == "Alight Solutions LLC":
         # Uses format "Month DD, YYYY"
+        invoice_date = invoice_date.replace(",", "").split(" ")
+        invoice_date[0] = calendar2[invoice_date[0]]
+        invoice_date = "/".join(invoice_date)
+    elif invoice_name in {"ADP SCREENING  SELECTION SERVICES", "Muka Development Group Llc"}:
+        # Uses format "Mon DD, YYYY"
         invoice_date = invoice_date.replace(",", "").split(" ")
         invoice_date[0] = calendar[invoice_date[0]]
         invoice_date = "/".join(invoice_date)

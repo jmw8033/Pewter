@@ -60,8 +60,12 @@ class EmailProcessor:
         self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
         self.testing_button.pack(side=tk.LEFT, padx=1)
 
-        self.log_text_widget = tk.Text(root, height=30, width=140, spacing1=4, padx=0, pady=0) # text label
-        self.log_text_widget.pack()
+        scrollbar = tk.Scrollbar(root)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.log_text_widget = tk.Text(root, yscrollcommand=scrollbar.set, height=30, width=140, spacing1=4, padx=0, pady=0) # text label
+        self.log_text_widget.pack(side=tk.LEFT, fill=tk.BOTH)
+        scrollbar.configure(command=self.log_text_widget.yview)
 
         # GUI STYLES
         self.log_text_widget.tag_configure("red", background="#FFCCCC")
@@ -354,8 +358,9 @@ class EmailProcessor:
             
             # Insert the new message to the text widget
             self.log_text_widget.insert(tk.END, message + "\n", (tag, "default"))
-            if self.log_text_widget.yview()[1] == 1.0:
-                self.log_text_widget.see(tk.END)
+            # If the bottom quarter of the text widget is visible, autoscroll
+            if self.log_text_widget.yview()[1] > 0.75:
+                self.log_text_widget.yview_moveto(1)
 
             # Send email for errors
             if tag == "red" and sender_imap:
