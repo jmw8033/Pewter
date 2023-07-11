@@ -143,7 +143,7 @@ class EmailProcessor:
     def search_inbox(self, imap): # Main Loop - searches inbox for new emails
         try:
             cycle_count = 0
-            while self.processor_running:
+            while imap.processor_running and self.processor_running:
                 if not self.pause_event.is_set() and self.connected:
                     # Search for all emails in the inbox
                     imap.imap.select("inbox")
@@ -174,7 +174,7 @@ class EmailProcessor:
                 self.testing_button.config(state=tk.NORMAL)
         except Exception as e:  
             self.log(f"An error occurred while searching the inbox for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
-            self.restart_processing()
+            self.restart_processing(imap)
 
 
     def process_email(self, imap, mail): # Handles each email
@@ -405,9 +405,9 @@ class EmailProcessor:
         self.pause_event.clear()
 
  
-    def restart_processing(self): # Restarts processing
-        self.log("Restarting...", tag="orange")
-        self.processor_running = False
+    def restart_processing(self, imap): # Restarts processing
+        self.log(f"Restarting {imap.username}", tag="orange")
+        imap.processor_running = False
         self.pause_button.config(text="Pause", command=self.pause_processing)
         self.main()
 
@@ -471,6 +471,7 @@ class MYImap:
         self.imap = imap
         self.username = username
         self.password = password
+        self.processor_running = True
     
 
 if __name__ == "__main__":
