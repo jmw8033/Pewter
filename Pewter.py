@@ -354,7 +354,8 @@ class EmailProcessor:
             
             # Insert the new message to the text widget
             self.log_text_widget.insert(tk.END, message + "\n", (tag, "default"))
-            self.log_text_widget.see(tk.END)
+            if self.log_text_widget.yview()[1] == 1.0:
+                self.log_text_widget.see(tk.END)
 
             # Send email for errors
             if tag == "red" and sender_imap:
