@@ -292,7 +292,7 @@ class EmailProcessor:
         
         # Save invoice
         os.rename(filepath, new_filepath)
-        self.log(f"Created new invoice file {os.path.basename(new_filepath)} for {imap.username}", tag="blue")
+        self.log(f"Created new invoice file {os.path.basename(new_filepath)} for {imap.username} - {self.current_date} {self.current_time}", tag="blue")
         return True, new_filepath
         
 
