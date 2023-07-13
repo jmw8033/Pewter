@@ -154,7 +154,7 @@ class EmailProcessor:
                     _, emails = imap.imap.search(None, "ALL")
 
                     # Check if no new mail
-                    if not emails[0].split():
+                    if not emails[0]:
                         self.log(f"No new emails for {imap.username} - {self.current_time} {self.current_date}", tag="no_new_emails")
 
                         # Check if emails need to be looked at
@@ -170,6 +170,7 @@ class EmailProcessor:
                     if cycle_count == self.RECONNECT_CYCLE_COUNT:
                         imap = self.reconnect(imap)
                         cycle_count = 0
+                        
             # Disconnect when the program is closed
             self.disconnect(imap)
             if self.logging_out:
