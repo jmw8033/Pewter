@@ -413,9 +413,8 @@ class EmailProcessor:
  
     def restart_processing(self, imap): # Restarts processing
         self.log(f"Restarting {imap.username}", tag="orange")
-        imap.processor_running = False
-        self.pause_button.config(text="Pause", command=self.pause_processing)
-        self.main()
+        self.disconnect(imap)
+        imap = self.connect(imap.username, imap.password)
 
    
     def logout(self): # Logs out
