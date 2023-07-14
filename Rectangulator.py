@@ -1,3 +1,4 @@
+import matplotlib
 from email.mime.multipart import MIMEMultipart
 from matplotlib.widgets import TextBox
 from matplotlib.patches import Rectangle
@@ -10,6 +11,7 @@ import numpy as np
 import pytesseract
 import traceback
 import threading
+import warnings
 import smtplib
 import config
 import math
@@ -18,6 +20,7 @@ import glob
 import re
 import os
 
+warnings.simplefilter("ignore", UserWarning)
 pytesseract.pytesseract.tesseract_cmd = config.PYTESSERACT_PATH
 invoice = True
 log_file = root = None
