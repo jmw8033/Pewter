@@ -70,11 +70,6 @@ class EmailProcessor:
         self.log_text_widget.pack(side=tk.LEFT, fill=tk.BOTH)
         scrollbar.configure(command=self.log_text_widget.yview)
 
-        self.error_counter_label = tk.Label(root, text="Errors: ") # Error counter label
-        self.error_counter_label.pack(side=tk.RIGHT, padx=1)
-        self.error_counter = tk.Label(root, text="0") # Error counter
-        self.error_counter.pack(side=tk.RIGHT, padx=1)
-
         # GUI STYLES
         self.log_text_widget.tag_configure("red", background="#FFCCCC")
         self.log_text_widget.tag_configure("yellow", background="yellow")
