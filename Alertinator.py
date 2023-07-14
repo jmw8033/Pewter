@@ -22,7 +22,6 @@ class AlertWindow(tk.Toplevel):
         no_button.pack(side=tk.LEFT, expand=True, fill=tk.X)
 
         for i in range(numbered_buttons): # Numbered buttons
-            # make numbered buttons under the yes/no buttons
             numbered_button = tk.Button(self, text=str(i+1), command=lambda i=i: self.on_numbered_button_click(i), height=2, width=10, bg="#A2A2FF")
             numbered_button.pack(side=tk.LEFT, expand=True, fill=tk.X)
             
