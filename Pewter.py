@@ -70,6 +70,11 @@ class EmailProcessor:
         self.log_text_widget.pack(side=tk.LEFT, fill=tk.BOTH)
         scrollbar.configure(command=self.log_text_widget.yview)
 
+        self.error_counter_label = tk.Label(root, text="Errors: ") # Error counter label
+        self.error_counter_label.pack(side=tk.RIGHT, padx=1)
+        self.error_counter = tk.Label(root, text="0") # Error counter
+        self.error_counter.pack(side=tk.RIGHT, padx=1)
+
         # GUI STYLES
         self.log_text_widget.tag_configure("red", background="#FFCCCC")
         self.log_text_widget.tag_configure("yellow", background="yellow")
@@ -161,8 +166,9 @@ class EmailProcessor:
                     if not emails[0]:
                         self.log(f"No new emails for {imap.username} - {self.current_time} {self.current_date}", tag="no_new_emails")
 
-                        # Check if emails need to be looked at
-                        self.check_labels(imap, ["Need_Print", "Need_Login", "Errors"])
+                        # Check if emails need to be looked at every 3 cycles
+                        if cycle_count % 3 == 0:
+                            self.check_labels(imap, ["Need_Print", "Need_Login", "Errors"])
 
                         # Pause until next cycle
                         self.pause_event.wait(timeout=self.WAIT_TIME)
