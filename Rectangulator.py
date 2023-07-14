@@ -35,6 +35,7 @@ class Rectangulator:
 
         self.rectangles = [] #contains rectangle objects
         self.coordinates = [] #contains coordinates of rectangle objects
+        self.correcting_rect_index = None
         self.start_x = None
         self.start_y = None
         self.rect = None 
@@ -86,15 +87,26 @@ class Rectangulator:
             
             # Ask for verifictaion
             def handle_user_input():
+                if self.correcting_rect_index is not None:
+                    corrected_rect = self.rectangles.pop()
+                    corrected_coord = self.coordinates.pop()
+                    self.rectangles.insert(self.correcting_rect_index, corrected_rect)
+                    self.coordinates.insert(self.correcting_rect_index, corrected_coord)
+
                  # Show extracted text for verification
                 headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
                 extracted_text = ""
                 for i, rect in enumerate(self.rectangles):
                     extracted_text += (headers[i] + get_text_in_rect(rect, self.pdf_path) + "\n")
-                text_is_correct = AlertWindow(f"Does the following text match what you selected?\n\n{extracted_text}").get_answer()
+                text_is_correct = AlertWindow(f"Does the following text match what you selected?\n\n{extracted_text}", 3).get_answer()
 
                 # If user says yes, close the window
-                if text_is_correct:
+                if isinstance(text_is_correct, int) and not isinstance(text_is_correct, bool):
+                    print(text_is_correct)
+                    self.correcting_rect_index = text_is_correct
+                    log(f"Please reselect {headers[self.correcting_rect_index]}")
+                    self.reset_rectangles(specific_rect=self.correcting_rect_index)
+                elif text_is_correct:
                     plt.close(self.fig)
                 else:
                     log("Please reselect rectangles")
@@ -111,7 +123,8 @@ class Rectangulator:
 
             # Append rectangle and coordinated to list
             self.rectangles.append(self.rect)
-            self.coordinates.append((self.rect.get_x(), self.rect.get_y(), self.rect.get_width(), self.rect.get_height()))  # Store coordinates
+            self.coordinates.append((self.rect.get_x(), self.rect.get_y(), 
+                                    self.rect.get_width(), self.rect.get_height()))  # Store coordinates
             self.rect = None
             self.ax.figure.canvas.draw()
 
@@ -169,13 +182,20 @@ class Rectangulator:
             self.zoom(event.xdata, event.ydata, self.zoom_factor)
 
 
-    def reset_rectangles(self): # Reset the current rectangles
-        for rect in self.rectangles:
-            rect.remove()
-        self.rectangles = []
-        self.coordinates = []
-        self.rect = None  
-        self.ax.figure.canvas.draw()
+    def reset_rectangles(self, specific_rect=None): # Reset the current rectangles
+        if specific_rect is not None:
+            self.rectangles[specific_rect].remove()
+            self.rectangles.pop(specific_rect)
+            self.coordinates.pop(specific_rect)
+            self.ax.figure.canvas.draw()
+        else:
+            for rect in self.rectangles:
+                rect.remove()
+            self.rectangles = []
+            self.coordinates = []
+            self.rect = None  
+            self.correcting_rect_index = None
+            self.ax.figure.canvas.draw()
 
 
     def zoom(self, x, y, zoom_factor):
@@ -284,8 +304,11 @@ def get_text_in_rect(rect, pdf_path):
 
 
 def check_outlier(invoice_name, invoice_date):
-    calendar = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04", "May": "05", "Jun": "06", "Jul": "07", "Aug": "08", "Sep": "09", "Oct": "10", "Nov": "11", 'Dec': "12"}
-    calendar2 = {"January": "01", "February": "02", "March": "03", "April": "04", "May": "05", "June": "06", "July": "07", "Aug": "08", "September": "09", "October": "10", "November": "11", 'December': "12"}
+    calendar = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04", "May": "05", "Jun": "06", 
+                "Jul": "07", "Aug": "08", "Sep": "09", "Oct": "10", "Nov": "11", 'Dec': "12"}
+    calendar2 = {"January": "01", "February": "02", "March": "03", "April": "04", "May": "05", "June": "06", 
+                "July": "07", "Aug": "08", "September": "09", "October": "10", "November": "11", 'December': "12"}
+    
     if invoice_name == "BUZZI UNICEM USA - Cement":
         # Uses format "DD-Month-YY"
         invoice_date = invoice_date.split("-")

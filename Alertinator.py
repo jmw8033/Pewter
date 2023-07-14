@@ -2,11 +2,12 @@ import tkinter as tk
 
 class AlertWindow(tk.Toplevel):
 
-    def __init__(self, message):
+    def __init__(self, message, numbered_buttons=0):
         super().__init__()
         self.title("Alert")
         self.geometry("600x300")
         self.choice = None
+        self.numbered_buttons = numbered_buttons
 
         # Ensure the window is always on top
         self.attributes("-topmost", True)
@@ -19,6 +20,15 @@ class AlertWindow(tk.Toplevel):
 
         no_button = tk.Button(self, text="No", command=self.on_no_button_click, height=2, width=10, bg="#FFA2A2")
         no_button.pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        for i in range(numbered_buttons): # Numbered buttons
+            # make numbered buttons under the yes/no buttons
+            numbered_button = tk.Button(self, text=str(i+1), command=lambda i=i: self.on_numbered_button_click(i), height=2, width=10, bg="#A2A2FF")
+            numbered_button.pack(side=tk.LEFT, expand=True, fill=tk.X)
+            
+    def on_numbered_button_click(self, i):
+        self.choice = i
+        self.destroy()
 
     def on_yes_button_click(self):
         self.choice = True
