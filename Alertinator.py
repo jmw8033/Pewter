@@ -9,8 +9,7 @@ class AlertWindow(tk.Toplevel):
         self.choice = None
 
         # Ensure the window is always on top
-        self.transient(self.master)
-        self.grab_set()
+        self.attributes("-topmost", True)
 
         label = tk.Label(self, text=message, wraplength=1000, font=("Courier", 11), justify=tk.LEFT)
         label.pack(padx=20, pady=20)

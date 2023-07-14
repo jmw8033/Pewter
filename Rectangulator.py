@@ -332,7 +332,7 @@ def log(*args):
 
 def send_email():
     global root
-    if root.TESTING:
+    if root == None or root.TESTING:
         return
     try:
         sender_email = f"{config.ACP_USER}{config.ADDRESS}"
