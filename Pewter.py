@@ -57,7 +57,10 @@ class EmailProcessor:
         self.logout_button = tk.Button(self.button_frame, text="Logout", command=self.logout, state=tk.DISABLED) # logout button
         self.logout_button.pack(side=tk.LEFT, padx=1)
 
-        self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
+        self.errors_button = tk.Button(self.button_frame, text="Resolve Errors", command=self.resolve_errors, state=tk.DISABLED) # move errors to inbox
+        self.errors_button.pack(side=tk.LEFT, padx=1)
+
+        self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.toggle_testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
         self.testing_button.pack(side=tk.LEFT, padx=1)
 
         scrollbar = tk.Scrollbar(root)
@@ -99,6 +102,7 @@ class EmailProcessor:
         self.pause_event.clear()
         self.logout_button.config(state=tk.NORMAL)
         self.testing_button.config(state=tk.DISABLED)
+        self.errors_button.config(state=tk.NORMAL)
         
         # ACP login
         self.imap_acp = self.connect(self.ACP_USER, self.ACP_PASS)
@@ -194,7 +198,7 @@ class EmailProcessor:
 
             # Check if sender is trusted
             if not sender_email.endswith(self.TRUSTED_ADDRESS):
-                self.move_email(imap, mail, "Not_Invoices", subject)
+                self.move_email(imap, mail, "Not_Invoices")
                 return
             
             # Check for attachments
@@ -207,14 +211,14 @@ class EmailProcessor:
 
             # Move to invoices label if no errors
             if not attachment_error:
-                self.move_email(imap, mail, "Invoices", subject)
+                self.move_email(imap, mail, "Invoices")
             else:
                 self.log(f"'{subject}' failed to download, moved to Error label for {imap.username}", tag="red", sender_imap=imap)
-                self.move_email(imap, mail, "Errors", subject)
+                self.move_email(imap, mail, "Errors")
 
         except Exception as e:
             self.log(f"An error occurred while processing an email for {imap.username}: {str(e)} \n {traceback.format_exc()}", tag="red", sender_imap=imap)
-            self.move_email(imap, mail, "Errors", subject)
+            self.move_email(imap, mail, "Errors")
             return
         
 
@@ -222,7 +226,7 @@ class EmailProcessor:
         filepaths = Loginulator.get_filepaths(msg)
         if not filepaths:
             self.log(f"Loginulator failed for '{subject}' for {imap.username}", tag="red", sender_imap=imap)
-            self.move_email(imap, mail, "Need_Login", subject)
+            self.move_email(imap, mail, "Need_Login")
             return True
         
         for filepath in filepaths:
@@ -305,13 +309,20 @@ class EmailProcessor:
             self.log(f"Printed {os.path.basename(filepath)} completed successfully for {imap.username}.", tag="blue")
             return True
         except Exception as e:
-            self.move_email(imap, mail, "Need_Print", subject)
+            self.move_email(imap, mail, "Need_Print")
             self.log(f"Printing failed: {str(e)}", tag="red", sender_imap=imap)
             return False
 
 
-    def move_email(self, imap, mail, label, subject): # Moves emails to labels
+    def move_email(self, imap, mail, label): # Moves emails to labels
+        subject = "Unknown"
         try:
+            # Get email subject
+            _, data = imap.imap.fetch(mail, "(RFC822)")
+            raw_email = data[0][1]
+            msg = email.message_from_bytes(raw_email)
+            subject = msg["Subject"]
+
             # Make a copy of the email in the specified label
             copy = imap.imap.copy(mail, label)
 
@@ -400,15 +411,37 @@ class EmailProcessor:
             self.root.update()
 
 
+    def resolve_errors(self): # Moves error emails back to inbox
+        try:
+            self.log(f"Attempting to resolve errors.", tag="blue")
+            for imap in [self.imap_acp, self.imap_apc]:
+                # Get emails in error label
+                imap.imap.select("Errors")
+                _, data = imap.imap.search(None, 'ALL')
+                email_ids = data[0].split()
+
+                if len(email_ids) == 0:
+                    self.log(f"No errors to resolve for {imap.username}.", tag="blue")
+                    continue
+
+                # Move emails back to inbox
+                for email_id in email_ids:
+                    self.move_email(imap, email_id, "inbox")
+        except Exception as e:
+            self.log(f"Error resolving errors for {imap.username}: {str(e)}", tag="red", sender_imap=imap)
+
+
     def pause_processing(self): # Pauses processing
         self.log("Processing paused.", tag="yellow")
         self.pause_button.config(text="Resume", command=self.resume_processing)
+        self.errors_button.config(state=tk.DISABLED)
         self.pause_event.set()
 
 
     def resume_processing(self): # Resumes processing
         self.log("Processing resumed.", tag="yellow")
         self.pause_button.config(text="Pause", command=self.pause_processing)
+        self.errors_button.config(state=tk.NORMAL)
         self.pause_event.clear()
 
  
@@ -421,13 +454,14 @@ class EmailProcessor:
     def logout(self): # Logs out
         self.log("Logging out...", tag="orange")
         self.pause_button.config(state=tk.DISABLED)
+        self.errors_button.config(state=tk.DISABLED)
         self.logout_button.config(state=tk.DISABLED)
         self.pause_event.set()
         self.processor_running = False
         self.logging_out = True
 
    
-    def testing(self):
+    def toggle_testing(self):
         if self.TESTING:
             self.TESTING = False
             self.testing_button.config(bg="#FFCCCC")

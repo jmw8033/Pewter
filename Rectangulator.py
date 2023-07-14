@@ -331,6 +331,9 @@ def log(*args):
 
 
 def send_email():
+    global root
+    if root.TESTING:
+        return
     try:
         sender_email = f"{config.ACP_USER}{config.ADDRESS}"
 
