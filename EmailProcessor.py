@@ -204,10 +204,10 @@ class EmailProcessor:
             # Check for attachments
             has_attachment = any(part.get("content-disposition", "").startswith("attachment") for part in msg.walk() if msg.is_multipart())
             if not has_attachment:
-                attachment_error = self.handle_login(mail, msg, subject)
+                attachment_error = self.handle_login(mail)
             else:            
                 # Handle attachments
-                attachment_error = self.handle_attachments(mail, msg, subject)
+                attachment_error = self.handle_attachments(mail)
 
             # Move to invoices label if no errors
             if not attachment_error:
@@ -222,7 +222,9 @@ class EmailProcessor:
             return
         
 
-    def handle_login(self, mail, msg, subject): # Handles login emails
+    def handle_login(self, mail): # Handles login emails
+        msg = self.get_msg(mail)
+        subject = msg["Subject"]
         filepaths = Loginulator.get_filepaths(msg)
         if not filepaths:
             self.log(f"Loginulator failed for '{subject}'", tag="red", send_email=True)
@@ -235,14 +237,15 @@ class EmailProcessor:
                 # Save invoice
                 os.rename(filepath, new_filepath)
                 self.log(f"Created new invoice file {os.path.basename(new_filepath)}", tag="blue")
-                self.print_invoice(new_filepath, mail, subject)
+                self.print_invoice(new_filepath, mail)
                 return False
             except Exception as e:
                 self.log(f"An error occurred while renaming {filepath} to {new_filepath}: {str(e)}", tag="red", send_email=True)
                 return True
 
 
-    def handle_attachments(self, mail, msg, subject):        # Iterate over email parts and find pdf
+    def handle_attachments(self, mail):        # Iterate over email parts and find pdf
+        msg = self.get_msg(mail)
         error = False
         for part in msg.walk():
             if part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
@@ -255,7 +258,7 @@ class EmailProcessor:
                     continue
             
                 if not self.TESTING:
-                    self.print_invoice(filepath, mail, subject)
+                    self.print_invoice(filepath, mail)
         return error
 
 
@@ -292,7 +295,7 @@ class EmailProcessor:
         # Check if invoice has already been processed
         if os.path.exists(new_filepath):
             os.remove(filepath)
-            self.log(f"New invoice file already exists at {new_filepath}", tag="red", send_email=True)
+            self.log(f"New invoice file already exists at {new_filepath}", tag="orange", send_email=True)
             return False, None
         
         # Save invoice
@@ -331,7 +334,7 @@ class EmailProcessor:
             self.log(f"Email '{subject}' transfer failed: {str(e)}", tag="red", send_email=True)
 
 
-    def send_email(self, subject, body):
+    def send_email(self, body):
         try:
             if self.TESTING:
                 return 
@@ -340,7 +343,7 @@ class EmailProcessor:
 
             # Create a multipart message and set headers
             message = MIMEMultipart()
-            message["Subject"] = subject
+            message["Subject"] = "Alert"
             message["From"] = sender_email
             message["To"] = self.RECIEVER_EMAIL
             message.attach(MIMEText(body, "plain"))
