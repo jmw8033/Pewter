@@ -133,6 +133,10 @@ class EmailProcessor:
                 self.log(f"Unable to connect to {self.username}: {str(e)}", tag="red", send_email=True)
             time.sleep(5)
             return self.connect(self.username, self.password, log=False) # try again after 5 seconds
+        except RecursionError as e: 
+            self.log(f"An error occurred while connecting: {str(e)}", tag="red", send_email=True)
+            time.sleep(900) # wait 15 minutes
+            return self.connect(self.username, self.password, log=False)
         
 
     def disconnect(self, log=True):
@@ -142,6 +146,9 @@ class EmailProcessor:
             self.connected = False
             if log:
                 self.log(f"--- Disconnected from {self.username} --- {self.current_time} {self.current_date}", tag="red")
+        except RecursionError as e:
+            # If disconnecting isn't working, were probably already disconnected
+            self.log(f"Disconnecting isn't working: {str(e)}", tag="red", send_email=True)
         except Exception as e:
             if log:
                 self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", send_email=True)    
