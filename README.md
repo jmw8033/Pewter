@@ -14,19 +14,26 @@ Then using the Rectangulator (trademarked) it saves a template containing where 
 when an invoice is recieved from that same company, it can correctly name it on its own (I name invoices in the format mm-dd-yy_invoice#). It also prints it to the default printer.
 
 ## Configuration
-The program is currently really only built to be used for my specific purpose, but if you wanted to use it for your own project, the only code you would really have to modify
-is the main method in the EmailProcessor class and the Rectangulator to fit your invoice name format (and probably some other things since I didn't think this project would get this far and it's a bit messy). 
+~~The program is currently really only built to be used for my specific purpose, but if you wanted to use it for your own project, the only code you would really have to modify
+is the main method in the EmailProcessor class and the Rectangulator to fit your invoice name format (and probably some other things since I didn't think this project would get this far and it's a bit messy).~~
 
-**You would also have to modify the config.py file:**
+The program is now significantly more accessible as each email is now opened in its own window. You can now easily set up as many emails as you want and all you need to change is the config and the Rectangulator if 
+you need a different invoice name format.
+
+**Current config.py file setup:**
 * LOG_FILE: Path to the log text file for storing application logs.
 * TEMPLATE_FOLDER: Path to the folder containing invoice templates.
 * INVOICE_FOLDER: Path to the folder where downloaded invoices will be stored.
+* TEST_TEMPLATE_FOLDER: Path to the folder containing invoice templates when testing is enabled.
+* TEST_INVOICE_FOLDER: Path to the folder where downloaded invoices will be store when testing is enabled.
 * ACP_USER, ACP_PASS, APC_USER, APC_PASS: Username and passwords for email accounts. **These are purely unique to me. If you're just handling one email you would just have one set of username and password.**
 * IMAP_SERVER: IMAP server address (ex. imap.gmail.com).
 * SMTP_SERVER: SMTP server address (ex. smtp.gmail.com).
 * RECIEVER_EMAIL: Email address to receive error alerts.
 * TRUSTED_ADDRESS: Trusted email address for invoice senders.
 * ADDRESS: Email address domain (ex. @gmail.com).
+* PYTESSERACT_PATH: Path to pytesseract
+* CHROMEDRIVER_PATH: Path to chromedriver
 
 ## Contributing
 Contributions to this project are welcome. If you find any issues or have suggestions for improvements, feel free to open an issue or submit a pull request.
