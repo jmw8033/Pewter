@@ -350,7 +350,7 @@ class EmailProcessor:
 
             # Create a multipart message and set headers
             message = MIMEMultipart()
-            message["Subject"] = "Alert"
+            message["Subject"] = "Error Alert"
             message["From"] = sender_email
             message["To"] = self.RECIEVER_EMAIL
             message.attach(MIMEText(body, "plain"))
@@ -383,7 +383,7 @@ class EmailProcessor:
 
             # Send email for errors
             if tag == "red" and send_email:
-                self.send_email("Error Alert", message)
+                self.send_email(message)
             
             # Write to the log file
             with open(self.LOG_FILE, "a") as file:
