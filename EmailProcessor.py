@@ -6,6 +6,7 @@ import traceback
 import win32api
 import imaplib
 import smtplib
+import random
 import config
 import email
 import time
@@ -254,8 +255,11 @@ class EmailProcessor:
     def handle_attachments(self, mail):        # Iterate over email parts and find pdf
         msg = self.get_msg(mail)
         error = False
+        filenames = []
         for part in msg.walk():
-            if part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
+            filenames.append(part.get_filename())
+            if part.get_filename() not in filenames and part.get_content_disposition() is not None \
+                    and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
                 # Check if download is successful
                 invoice_downloaded, filepath = self.download_invoice(part)
                 if invoice_downloaded == "not_invoice":
@@ -303,7 +307,8 @@ class EmailProcessor:
         if os.path.exists(new_filepath):
             os.remove(filepath)
             self.log(f"New invoice file already exists at {new_filepath}", tag="orange", send_email=True)
-            return False, None
+            new_filepath = new_filepath[:-4] + f"_{random.randint(1, 1000)}.pdf"
+            return True, new_filepath
         
         # Save invoice
         os.rename(filepath, new_filepath)
