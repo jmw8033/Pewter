@@ -257,9 +257,8 @@ class EmailProcessor:
         error = False
         filenames = []
         for part in msg.walk():
-            filenames.append(part.get_filename())
-            if part.get_filename() not in filenames and part.get_content_disposition() is not None \
-                    and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
+            if part.get_filename() not in filenames and part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
+                filenames.append(part.get_filename())
                 # Check if download is successful
                 invoice_downloaded, filepath = self.download_invoice(part)
                 if invoice_downloaded == "not_invoice":
