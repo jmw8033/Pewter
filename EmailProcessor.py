@@ -147,14 +147,13 @@ class EmailProcessor:
             self.connected = False
             if log:
                 self.log(f"--- Disconnected from {self.username} --- {self.current_time} {self.current_date}", tag="red")
-        except RecursionError as e:
-            # If disconnecting isn't working, were probably already disconnected
-            self.log(f"Disconnecting isn't working: {str(e)}", tag="red", send_email=True)
         except Exception as e:
             if log:
-                self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", send_email=True)    
-            time.sleep(5)    
-            self.disconnect(log=False) # try again after 5 seconds
+                self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", send_email=True)   
+                self.disconnect(log=False) # try again after 5 seconds 
+            else:
+                # If disconnecting isn't working, were probably already disconnected
+                self.log(f"Disconnecting isn't working: {str(e)}", tag="red", send_email=True)
 
 
     def search_inbox(self): # Main Loop - searches inbox for new emails
@@ -469,7 +468,9 @@ class EmailProcessor:
     def restart_processing(self): # Restarts processing
         self.log(f"Restarting...", tag="orange")
         self.disconnect()
-        self.imap = self.connect()
+        self.processor_thread.join()
+        self.main()
+        self.log("Restarted.", tag="orange", send_email=True)
 
    
     def logout(self): # Logs out
