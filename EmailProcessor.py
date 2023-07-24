@@ -468,7 +468,7 @@ class EmailProcessor:
     def restart_processing(self): # Restarts processing
         self.log(f"Restarting...", tag="orange")
         self.disconnect()
-        self.processor_thread.join()
+        self.processor_thread = None
         self.main()
         self.log("Restarted.", tag="orange", send_email=True)
 
