@@ -304,8 +304,10 @@ class EmailProcessor:
         
         # Check if invoice has already been processed
         if os.path.exists(new_filepath):
-            self.log(f"New invoice file already exists at {new_filepath}", tag="orange")
-            new_filepath = new_filepath[:-4] + f"_{random.randint(1, 1000)}.pdf"
+            old_filepath = new_filepath
+            self.log(f"New invoice file already exists at {old_filepath}", tag="orange")
+            new_filepath = old_filepath[:-4] + f"_{random.randint(1, 1000)}.pdf"
+            os.rename(old_filepath, new_filepath)
             return True, new_filepath
         
         # Save invoice
