@@ -390,6 +390,7 @@ def not_invoice(event):
 def main(pdf_path, root_arg, template_folder):
     global log_file
     global root
+    global invoice
     log_file = config.LOG_FILE
     root = root_arg
 
@@ -457,6 +458,7 @@ def main(pdf_path, root_arg, template_folder):
         plt.show()
     
         if not invoice:#  If the user clicked the "Not An Invoice" button
+            invoice = True
             return "not_invoice"
         filename = draggable_rect.rename_pdf()
         if filename: # If the user dragged a rectangle

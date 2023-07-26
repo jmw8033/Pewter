@@ -266,7 +266,7 @@ class EmailProcessor:
                     error = True
                     continue
             
-                if not self.TESTING:
+                if not self.TESTING and invoice_downloaded:
                     self.print_invoice(filepath, mail)
         return error
 
@@ -280,7 +280,7 @@ class EmailProcessor:
         
         # Check if file already exists
         if os.path.exists(filepath):
-            self.log(f"Invoice file already exists at {filepath}", tag="red", send_email=True)
+            self.log(f"Invoice file already exists at {filepath}", tag="red")
             return False, None
 
         # Download invoice PDF
@@ -292,6 +292,7 @@ class EmailProcessor:
 
         # Check if not invoice
         if new_filepath == "not_invoice":
+            self.log(f"'{filename}' is not an invoice", tag="blue")
             os.remove(filepath)
             return "not_invoice", None
 
@@ -303,8 +304,7 @@ class EmailProcessor:
         
         # Check if invoice has already been processed
         if os.path.exists(new_filepath):
-            os.remove(filepath)
-            self.log(f"New invoice file already exists at {new_filepath}", tag="orange", send_email=True)
+            self.log(f"New invoice file already exists at {new_filepath}", tag="orange")
             new_filepath = new_filepath[:-4] + f"_{random.randint(1, 1000)}.pdf"
             return True, new_filepath
         
