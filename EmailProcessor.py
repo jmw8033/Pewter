@@ -153,7 +153,7 @@ class EmailProcessor:
                 self.disconnect(log=False) # try again after 5 seconds 
             else:
                 # If disconnecting isn't working, were probably already disconnected
-                self.log(f"Disconnecting isn't working: {str(e)}", tag="red", send_email=True)
+                self.log(f"Disconnecting isn't working: {str(e)}", tag="red")
 
 
     def search_inbox(self): # Main Loop - searches inbox for new emails
