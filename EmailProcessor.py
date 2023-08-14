@@ -275,14 +275,14 @@ class EmailProcessor:
         # Get fllename and attachment
         filename = part.get_filename()
         attachment = part.get_payload(decode=True)
-        
+
         filepath = os.path.join(self.INVOICE_FOLDER, filename)
         
         # Check if file already exists
         if os.path.exists(filepath):
-            self.log(f"Invoice file already exists at {filepath}", tag="red")
-            return False, None
-
+            filename = f"{filename[:-4]}_{str(int(time.time()))}.pdf"
+            filepath = os.path.join(self.INVOICE_FOLDER, filename)
+        
         # Download invoice PDF
         with open(filepath, 'wb') as file:
             file.write(attachment)
@@ -306,7 +306,7 @@ class EmailProcessor:
         if os.path.exists(new_filepath):
             old_filepath = new_filepath
             self.log(f"New invoice file already exists at {old_filepath}", tag="orange")
-            new_filepath = old_filepath[:-4] + f"_{random.randint(1, 1000)}.pdf"
+            new_filepath = f"{old_filepath[:-4]}_{str(int(time.time()))}.pdf"
             os.rename(old_filepath, new_filepath)
             return True, new_filepath
         
