@@ -14,9 +14,6 @@ Then using the Rectangulator (trademarked) it saves a template containing where 
 when an invoice is recieved from that same company, it can correctly name it on its own (I name invoices in the format mm-dd-yy_invoice#). It also prints it to the default printer.
 
 ## Configuration
-~~The program is currently really only built to be used for my specific purpose, but if you wanted to use it for your own project, the only code you would really have to modify
-is the main method in the EmailProcessor class and the Rectangulator to fit your invoice name format (and probably some other things since I didn't think this project would get this far and it's a bit messy).~~
-
 The program is now significantly more accessible as each email is now opened in its own window. You can now easily set up as many emails as you want and all you need to change is the config and the Rectangulator if 
 you need a different invoice name format.
 
