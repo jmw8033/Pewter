@@ -2,7 +2,6 @@ from EmailProcessor import EmailProcessor
 import threading
 import config
     
-
 if __name__ == "__main__":
     # ACP
     acp_email_processor = threading.Thread(target=EmailProcessor, args=(config.ACP_USER, config.ACP_PASS))

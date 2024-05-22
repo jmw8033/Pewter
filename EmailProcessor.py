@@ -64,11 +64,14 @@ class EmailProcessor:
         self.logout_button = tk.Button(self.button_frame, text="Logout", command=self.logout, state=tk.DISABLED) # logout button
         self.logout_button.pack(side=tk.LEFT, padx=1)
 
-        self.errors_button = tk.Button(self.button_frame, text="Resolve Errors", command=self.resolve_errors, state=tk.DISABLED) # move errors to inbox
+        self.errors_button = tk.Button(self.button_frame, text="Resolve Errors", command=self.resolve_errors, state=tk.DISABLED) # resolve errors button
         self.errors_button.pack(side=tk.LEFT, padx=1)
 
         self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.toggle_testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
         self.testing_button.pack(side=tk.LEFT, padx=1)
+
+        self.test_rectangulator_button = tk.Button(self.button_frame, text="Test Rectangulator", command=self.test_rectangulator, state=tk.DISABLED) # test rectangulator button
+        self.test_rectangulator_button.pack(side=tk.LEFT, padx=1)
 
         scrollbar = tk.Scrollbar(self.root)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -111,6 +114,7 @@ class EmailProcessor:
         self.logout_button.config(state=tk.NORMAL)
         self.testing_button.config(state=tk.DISABLED)
         self.errors_button.config(state=tk.NORMAL)
+        self.test_rectangulator_button.config(state=tk.NORMAL)
         
         # Imap login
         self.imap = self.connect()
@@ -493,6 +497,11 @@ class EmailProcessor:
             self.TESTING = True
             self.testing_button.config(bg="#CCFFCC")
 
+    def test_rectangulator(self):
+        self.log("Testing Rectangulator...", tag="orange")
+        
+        self.log("Testing complete.", tag="orange")
+
 
     def reconnect(self): # Reconnects to imap
         self.disconnect(log=False)
@@ -522,4 +531,4 @@ class EmailProcessor:
 
     @property
     def current_date(self):
-        return time.strftime("%Y-%m-%d", time.localtime())
+        return time.strftime("%m-%d-%Y", time.localtime())
