@@ -30,6 +30,10 @@ class EmailProcessor:
     ADDRESS = config.ADDRESS
     WAIT_TIME = config.WAIT_TIME
     RECONNECT_CYCLE_COUNT = config.RECONNECT_CYCLE_COUNT
+    TEST_INVOICE = config.TEST_INVOICE
+    TEST_INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
+    TEST_TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
+
 
     def __init__(self, username, password):
         # GUI
@@ -69,7 +73,7 @@ class EmailProcessor:
         self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.toggle_testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
         self.testing_button.pack(side=tk.LEFT, padx=1)
 
-        self.test_rectangulator_button = tk.Button(self.button_frame, text="Test Rectangulator", command=self.test_rectangulator, state=tk.DISABLED) # test rectangulator button
+        self.test_rectangulator_button = tk.Button(self.button_frame, text="Test Rectangulator", command=self.test_rectangulator, state=tk.NORMAL) # test rectangulator button
         self.test_rectangulator_button.pack(side=tk.LEFT, padx=1)
 
         scrollbar = tk.Scrollbar(self.root)
@@ -98,8 +102,8 @@ class EmailProcessor:
 
     def main(self): # Runs when start button is pressed 
         if self.TESTING:
-            self.TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
-            self.INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
+            self.TEMPLATE_FOLDER = self.TEST_TEMPLATE_FOLDER
+            self.INVOICE_FOLDER = self.TEST_INVOICE_FOLDER
             self.log("Testing mode enabled", tag="orange")
 
         self.log("Connecting...", tag="dgreen")
@@ -113,7 +117,6 @@ class EmailProcessor:
         self.logout_button.config(state=tk.NORMAL)
         self.testing_button.config(state=tk.DISABLED)
         self.errors_button.config(state=tk.NORMAL)
-        self.test_rectangulator_button.config(state=tk.NORMAL)
         
         # Imap login
         self.imap = self.connect()
@@ -211,16 +214,16 @@ class EmailProcessor:
             
             # Check for attachments
             has_attachment = any(part.get("content-disposition", "").startswith("attachment") for part in msg.walk() if msg.is_multipart())
-            isInvoice = True
+            is_invoice = True
             if not has_attachment:
                 attachment_error = self.handle_login(mail)
             else:            
                 # Handle attachments
-                attachment_error, isInvoice = self.handle_attachments(mail)
+                attachment_error, is_invoice = self.handle_attachments(mail)
 
             # Move to invoices label if no errors
             if not attachment_error:
-                if isInvoice:
+                if is_invoice:
                     self.move_email(mail, "Invoices")
                 else:
                     self.move_email(mail, "Not_Invoices")
@@ -258,8 +261,8 @@ class EmailProcessor:
 
     def handle_attachments(self, mail): # Iterate over email parts and find pdf
         msg = self.get_msg(mail)
-        hasError = False
-        isInvoice = True
+        has_error = False
+        is_invoice = True
         filenames = []
         for part in msg.walk():
             if part.get_filename() not in filenames and part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
@@ -267,15 +270,18 @@ class EmailProcessor:
                 # Check if download is successful and if it is an invoice
                 invoice_downloaded, filepath = self.download_invoice(part)
                 if invoice_downloaded == "not_invoice":
-                    isInvoice = False
+                    is_invoice = False
+                    should_print, filepath = filepath
+                    if should_print:
+                        self.print_invoice(filepath, mail)
                     continue
                 elif not invoice_downloaded:
-                    hasError = True
+                    has_error = True
                     continue
             
                 if not self.TESTING and invoice_downloaded:
                     self.print_invoice(filepath, mail)
-        return hasError, isInvoice
+        return has_error, is_invoice
 
 
     def download_invoice(self, part): # Downloads invoice PDF
@@ -291,17 +297,17 @@ class EmailProcessor:
             filepath = os.path.join(self.INVOICE_FOLDER, filename)
         
         # Download invoice PDF
-        with open(filepath, 'wb') as file:
+        with open(filepath, "wb") as file:
             file.write(attachment)
 
-        # Prompt user to draw rectangles
-        new_filepath = Rectangulator.main(filepath, self, self.TEMPLATE_FOLDER)
+        # Prompt user to make template
+        new_filepath, should_print = Rectangulator.main(filepath, self, self.TEMPLATE_FOLDER)
 
         # Check if not invoice
         if new_filepath == "not_invoice":
             self.log(f"'{filename}' is not an invoice", tag="blue")
             os.remove(filepath)
-            return "not_invoice", None
+            return "not_invoice", [should_print, filepath]
 
         # Check if Rectangulator fails
         if new_filepath == None:
@@ -346,7 +352,7 @@ class EmailProcessor:
             copy = self.imap.copy(mail, label)
 
             # Mark the original email as deleted
-            self.imap.store(mail, '+FLAGS', '\\Deleted')
+            self.imap.store(mail, "+FLAGS", "\\Deleted")
             self.imap.expunge()
             self.log(f"Email '{subject}' moved to {label}.", tag="blue")
         except Exception as e:
@@ -381,7 +387,7 @@ class EmailProcessor:
         try:
             if self.window_closed: #check if window is still open
                 return
-            message = ' '.join([str(arg) for arg in args]) #convert args to string
+            message = " ".join([str(arg) for arg in args]) #convert args to string
 
             # Get rid of no_new_emails messages
             if tag == "no_new_emails":
@@ -409,7 +415,7 @@ class EmailProcessor:
             try:
                 # Check if any emails in specified label
                 self.imap.select(label)
-                _, data = self.imap.search(None, 'ALL')
+                _, data = self.imap.search(None, "ALL")
                 email_ids = data[0].split()
 
                 # Alert user if there are emails
@@ -500,9 +506,10 @@ class EmailProcessor:
             self.TESTING = True
             self.testing_button.config(bg="#CCFFCC")
 
+
     def test_rectangulator(self):
         self.log("Testing Rectangulator...", tag="orange")
-        
+        Rectangulator.main(self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, testing=True)
         self.log("Testing complete.", tag="orange")
 
 
