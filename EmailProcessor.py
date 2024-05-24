@@ -214,15 +214,19 @@ class EmailProcessor:
             
             # Check for attachments
             has_attachment = any(part.get("content-disposition", "").startswith("attachment") for part in msg.walk() if msg.is_multipart())
+            isInvoice = True
             if not has_attachment:
                 attachment_error = self.handle_login(mail)
             else:            
                 # Handle attachments
-                attachment_error = self.handle_attachments(mail)
+                attachment_error, isInvoice = self.handle_attachments(mail)
 
             # Move to invoices label if no errors
             if not attachment_error:
-                self.move_email(mail, "Invoices")
+                if isInvoice:
+                    self.move_email(mail, "Invoices")
+                else:
+                    self.move_email(mail, "Not_Invoices")
             else:
                 self.log(f"'{subject}' failed to download, moved to Error label", tag="red", send_email=True)
                 self.move_email(mail, "Errors")
@@ -255,27 +259,29 @@ class EmailProcessor:
                 return True
 
 
-    def handle_attachments(self, mail):        # Iterate over email parts and find pdf
+    def handle_attachments(self, mail): # Iterate over email parts and find pdf
         msg = self.get_msg(mail)
-        error = False
+        hasError = False
+        isInvoice = True
         filenames = []
         for part in msg.walk():
             if part.get_filename() not in filenames and part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
                 filenames.append(part.get_filename())
-                # Check if download is successful
+                # Check if download is successful and if it is an invoice
                 invoice_downloaded, filepath = self.download_invoice(part)
                 if invoice_downloaded == "not_invoice":
+                    isInvoice = False
                     continue
                 elif not invoice_downloaded:
-                    error = True
+                    hasError = True
                     continue
             
                 if not self.TESTING and invoice_downloaded:
                     self.print_invoice(filepath, mail)
-        return error
+        return hasError, isInvoice
 
 
-    def download_invoice(self, part):
+    def download_invoice(self, part): # Downloads invoice PDF
         # Get fllename and attachment
         filename = part.get_filename()
         attachment = part.get_payload(decode=True)
