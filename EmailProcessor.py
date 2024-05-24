@@ -28,9 +28,8 @@ class EmailProcessor:
     RECIEVER_EMAIL = config.RECIEVER_EMAIL
     TRUSTED_ADDRESS = config.TRUSTED_ADDRESS
     ADDRESS = config.ADDRESS
-    WAIT_TIME = 10 # seconds
-    RECONNECT_TIME = 3600 # 1 hour
-    RECONNECT_CYCLE_COUNT = RECONNECT_TIME // WAIT_TIME
+    WAIT_TIME = config.WAIT_TIME
+    RECONNECT_CYCLE_COUNT = config.RECONNECT_CYCLE_COUNT
 
     def __init__(self, username, password):
         # GUI
@@ -140,7 +139,7 @@ class EmailProcessor:
             return self.connect(self.username, self.password, log=False) # try again after 5 seconds
         except RecursionError as e: 
             self.log(f"An error occurred while connecting: {str(e)}", tag="red", send_email=True)
-            time.sleep(900) # wait 15 minutes
+            time.sleep(60) # wait a minutes
             return self.connect(self.username, self.password, log=False)
         
 
@@ -173,9 +172,7 @@ class EmailProcessor:
                     if not emails[0]:
                         self.log(f"No new emails - {self.current_time} {self.current_date}", tag="no_new_emails")
 
-                        # Check if emails need to be looked at every 3 cycles
-                        if cycle_count % 3 == 0:
-                            self.check_labels(["Need_Print", "Need_Login", "Errors"])
+                        self.check_labels(["Need_Print", "Need_Login", "Errors"])
 
                         # Pause until next cycle
                         self.pause_event.wait(timeout=self.WAIT_TIME)
