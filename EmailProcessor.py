@@ -75,6 +75,9 @@ class EmailProcessor:
             self.print_errors_button = tk.Button(self.button_frame, text="Resolve Prints", command=self.resolve_prints, state=tk.DISABLED) # resolve unprinted invoices button
             self.print_errors_button.pack(side=tk.LEFT, padx=1)
 
+            self.clear_button = tk.Button(self.button_frame, text="Clear", command=lambda: self.log_text_widget.delete("1.0", tk.END), state=tk.NORMAL) # clear button
+            self.clear_button.pack(side=tk.LEFT, padx=1)
+
             self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.toggle_testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
             self.testing_button.pack(side=tk.LEFT, padx=1)
 
@@ -499,6 +502,8 @@ class EmailProcessor:
         self.log("Processing paused.", tag="yellow")
         self.pause_button.config(text="Resume", command=self.resume_processing)
         self.errors_button.config(state=tk.DISABLED)
+        self.print_errors_button.config(state=tk.DISABLED)
+        self.test_rectangulator_button.config(state=tk.DISABLED)
         self.pause_event.set()
 
 
@@ -506,6 +511,8 @@ class EmailProcessor:
         self.log("Processing resumed.", tag="yellow")
         self.pause_button.config(text="Pause", command=self.pause_processing)
         self.errors_button.config(state=tk.NORMAL)
+        self.print_errors_button.config(state=tk.NORMAL)
+        self.test_rectangulator_button.config(state=tk.NORMAL)
         self.pause_event.clear()
 
  
