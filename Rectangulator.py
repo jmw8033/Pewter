@@ -416,7 +416,7 @@ def main(pdf_path, root_arg, template_folder, testing=False):
                         # Clean the invoice date
                         invoice_date = check_outlier(invoice_name[0], invoice_date).replace("/", "-")
 
-                        return rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf"
+                        return rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf", True
             except Exception as e:
                 pass
 
@@ -499,7 +499,7 @@ def main(pdf_path, root_arg, template_folder, testing=False):
     except Exception as e:
         log(f"An error occurred while drawing rectangles: {str(e)}")
 
-    return None
+    return None, False
 
 
 if __name__ == "__main__":

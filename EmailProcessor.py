@@ -36,68 +36,77 @@ class EmailProcessor:
 
 
     def __init__(self, username, password):
-        # GUI
-        self.root = tk.Tk()
-        self.root.iconbitmap(self.ICON_PATH)
-        self.root.geometry("900x400")
-        self.root.title(f"{username.upper()} Pewter")
 
-        # VARIABLES
-        self.username = username
-        self.password = password
-        self.alert_window = None # used for pop ups
-        self.window_closed = None
-        self.processor_thread = None
-        self.processor_running = False
-        self.pause_event = threading.Event() # used for cycles
-        self.connected = False
-        self.logging_out = False
-        self.TESTING = False # default to false
+        try:
+            # GUI
+            self.root = tk.Tk()
+            self.root.iconbitmap(self.ICON_PATH)
+            self.root.geometry("900x400")
+            self.root.title(f"{username.upper()} Pewter")
 
-        # GUI BUTTONS
-        self.button_frame = tk.Frame(self.root)
-        self.button_frame.pack(side=tk.TOP)
+            # VARIABLES
+            self.username = username
+            self.password = password
+            self.alert_window = None # used for pop ups
+            self.window_closed = None
+            self.processor_thread = None
+            self.processor_running = False
+            self.pause_event = threading.Event() # used for cycles
+            self.connected = False
+            self.logging_out = False
+            self.TESTING = False # default to false
 
-        self.start_button = tk.Button(self.button_frame, text="Start Process", command=self.main) # start process button
-        self.start_button.pack(side=tk.LEFT, padx=1)
+            # GUI BUTTONS
+            self.button_frame = tk.Frame(self.root)
+            self.button_frame.pack(side=tk.TOP)
 
-        self.pause_button = tk.Button(self.button_frame, text="Pause", command=self.pause_processing, state=tk.DISABLED) # pause button
-        self.pause_button.pack(side=tk.LEFT, padx=1)
+            self.start_button = tk.Button(self.button_frame, text="Start Process", command=self.main) # start process button
+            self.start_button.pack(side=tk.LEFT, padx=1)
 
-        self.logout_button = tk.Button(self.button_frame, text="Logout", command=self.logout, state=tk.DISABLED) # logout button
-        self.logout_button.pack(side=tk.LEFT, padx=1)
+            self.pause_button = tk.Button(self.button_frame, text="Pause", command=self.pause_processing, state=tk.DISABLED) # pause button
+            self.pause_button.pack(side=tk.LEFT, padx=1)
 
-        self.errors_button = tk.Button(self.button_frame, text="Resolve Errors", command=self.resolve_errors, state=tk.DISABLED) # resolve errors button
-        self.errors_button.pack(side=tk.LEFT, padx=1)
+            self.logout_button = tk.Button(self.button_frame, text="Logout", command=self.logout, state=tk.DISABLED) # logout button
+            self.logout_button.pack(side=tk.LEFT, padx=1)
 
-        self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.toggle_testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
-        self.testing_button.pack(side=tk.LEFT, padx=1)
+            self.errors_button = tk.Button(self.button_frame, text="Resolve Errors", command=self.resolve_errors, state=tk.DISABLED) # resolve errors button
+            self.errors_button.pack(side=tk.LEFT, padx=1)
 
-        self.test_rectangulator_button = tk.Button(self.button_frame, text="Test Rectangulator", command=self.test_rectangulator, state=tk.NORMAL) # test rectangulator button
-        self.test_rectangulator_button.pack(side=tk.LEFT, padx=1)
+            self.print_errors_button = tk.Button(self.button_frame, text="Resolve Prints", command=self.resolve_prints, state=tk.DISABLED) # resolve unprinted invoices button
+            self.print_errors_button.pack(side=tk.LEFT, padx=1)
 
-        scrollbar = tk.Scrollbar(self.root)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.toggle_testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
+            self.testing_button.pack(side=tk.LEFT, padx=1)
 
-        self.log_text_widget = tk.Text(self.root, yscrollcommand=scrollbar.set, height=30, width=140, spacing1=4, padx=0, pady=0) # text label
-        self.log_text_widget.pack(side=tk.LEFT, fill=tk.BOTH)
-        scrollbar.configure(command=self.log_text_widget.yview)
+            self.test_rectangulator_button = tk.Button(self.button_frame, text="Test Rectangulator", command=self.test_rectangulator, state=tk.NORMAL) # test rectangulator button
+            self.test_rectangulator_button.pack(side=tk.LEFT, padx=1)
 
-        # GUI STYLES
-        self.log_text_widget.tag_configure("red", background="#FFCCCC")
-        self.log_text_widget.tag_configure("yellow", background="yellow")
-        self.log_text_widget.tag_configure("orange", background="#FFB434")	
-        self.log_text_widget.tag_configure("lgreen", background="#CCFFCC") # light green
-        self.log_text_widget.tag_configure("green", background="#39FF12") # green
-        self.log_text_widget.tag_configure("dgreen", background="#00994d") # dark green
-        self.log_text_widget.tag_configure("blue", background="#89CFF0")
-        self.log_text_widget.tag_configure("purple", background="#E6E6FA")
-        self.log_text_widget.tag_configure("gray", background="#DEDDDD")
-        self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD") # gray
-        self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8) # default
+            scrollbar = tk.Scrollbar(self.root)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) # runs exit protocol on window close
-        self.root.mainloop()
+            self.log_text_widget = tk.Text(self.root, yscrollcommand=scrollbar.set, height=30, width=140, spacing1=4, padx=0, pady=0) # text label
+            self.log_text_widget.pack(side=tk.LEFT, fill=tk.BOTH)
+            scrollbar.configure(command=self.log_text_widget.yview)
+
+            # GUI STYLES
+            self.log_text_widget.tag_configure("red", background="#FFCCCC")
+            self.log_text_widget.tag_configure("yellow", background="yellow")
+            self.log_text_widget.tag_configure("orange", background="#FFB434")	
+            self.log_text_widget.tag_configure("lgreen", background="#CCFFCC") # light green
+            self.log_text_widget.tag_configure("green", background="#39FF12") # green
+            self.log_text_widget.tag_configure("dgreen", background="#00994d") # dark green
+            self.log_text_widget.tag_configure("blue", background="#89CFF0")
+            self.log_text_widget.tag_configure("purple", background="#E6E6FA")
+            self.log_text_widget.tag_configure("gray", background="#DEDDDD")
+            self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD") # gray
+            self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8) # default
+
+            self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) # runs exit protocol on window close
+            self.root.mainloop()
+        except Exception as e:
+            print(f"An error occurred while initializing the EmailProcessor: {str(e)}")
+            time.sleep(5) # try again after 5 seconds
+            return self.__init__(username, password)
         
 
     def main(self): # Runs when start button is pressed 
@@ -117,6 +126,7 @@ class EmailProcessor:
         self.logout_button.config(state=tk.NORMAL)
         self.testing_button.config(state=tk.DISABLED)
         self.errors_button.config(state=tk.NORMAL)
+        self.print_errors_button.config(state=tk.NORMAL)
         
         # Imap login
         self.imap = self.connect()
@@ -345,8 +355,10 @@ class EmailProcessor:
     def move_email(self, mail, label): # Moves emails to labels
         subject = "Unknown"
         try:
-            # Get email subject
-            subject = self.get_msg(mail)["Subject"]
+            # Get msg and subject if possible
+            msg = self.get_msg(mail)
+            if msg:
+                subject = msg["Subject"]
 
             # Make a copy of the email in the specified label
             copy = self.imap.copy(mail, label)
@@ -464,6 +476,23 @@ class EmailProcessor:
                 self.move_email(email_id, "inbox")
         except Exception as e:
             self.log(f"Error resolving errors: {str(e)}", tag="red", send_email=True)
+
+
+    def resolve_prints(self): # Moves unprinted invoices back to inbox
+        try:
+            self.log(f"Attempting to resolve unprinted invoices.", tag="blue")
+            # Get emails in Need_Print label
+            email_ids = self.check_labels(["Need_Print"])
+
+            if len(email_ids) == 0:
+                self.log(f"No unprinted invoices to resolve.", tag="blue")
+                return
+
+            # Move emails back to inbox
+            for email_id in email_ids:
+                self.move_email(email_id, "inbox")
+        except Exception as e:
+            self.log(f"Error resolving unprinted invoices: {str(e)}", tag="red", send_email=True)
 
 
     def pause_processing(self): # Pauses processing
