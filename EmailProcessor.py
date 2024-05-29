@@ -38,7 +38,6 @@ class EmailProcessor:
 
 
     def __init__(self, username, password):
-
         try:
             # GUI
             self.root = tk.Tk()
@@ -115,7 +114,7 @@ class EmailProcessor:
         
 
     def main(self): # Runs when start button is pressed 
-        if self.TESTING:
+        if self.TESTING: # testing mode
             self.TEMPLATE_FOLDER = self.TEST_TEMPLATE_FOLDER
             self.INVOICE_FOLDER = self.TEST_INVOICE_FOLDER
             self.log("Testing mode enabled", tag="orange")
