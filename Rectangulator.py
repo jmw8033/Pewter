@@ -422,7 +422,8 @@ def main(pdf_path, root_arg, template_folder, testing=False):
 
     # If no template exists, make one
     try:
-        send_email() #email me
+        if not testing:
+            send_email() # email me
 
         # Draw rectangles on the PDF image for annotation
         doc = fitz.open(pdf_path)
