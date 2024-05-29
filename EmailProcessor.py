@@ -315,7 +315,7 @@ class EmailProcessor:
             file.write(attachment)
 
         # Prompt user to make template, timeout if it takes too long
-        return_list = [None, False]
+        return_list = []
         rectangulator = threading.Thread(target=Rectangulator.main, args=(filepath, self, self.TEMPLATE_FOLDER, return_list, self.TESTING))
         rectangulator.start()
         rectangulator.join(timeout=self.RECTANGULATOR_TIMEOUT) 
@@ -554,7 +554,13 @@ class EmailProcessor:
 
     def test_rectangulator(self):
         self.log("Testing Rectangulator...", tag="orange")
-        Rectangulator.main(self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, testing=True)
+        return_list = [None, False]
+        rectangulator = threading.Thread(target=Rectangulator.main, args=(self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, return_list, True))
+        rectangulator.start()
+        rectangulator.join(timeout=self.RECTANGULATOR_TIMEOUT) 
+        if rectangulator.is_alive():
+            print("Rectangulator timed out")
+        new_filepath, should_print = return_list
         self.log("Testing complete.", tag="orange")
 
 

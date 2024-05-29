@@ -414,7 +414,7 @@ def main(pdf_path, root_arg, template_folder, return_list, testing=False):
                         invoice_num = get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
                         # Clean the invoice date
                         invoice_date = check_outlier(invoice_name[0], invoice_date).replace("/", "-")
-                        return_list = [rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf", True]
+                        return_list.extend([rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf", True])
                         return return_list
             except Exception as e:
                 pass
@@ -495,14 +495,14 @@ def main(pdf_path, root_arg, template_folder, return_list, testing=False):
     
         if not invoice:#  If the user clicked the "Not An Invoice" button
             invoice = True
-            return_list = ["not_invoice", should_print]
+            return_list.extend(["not_invoice", should_print])
             return return_list
         filename = draggable_rect.rename_pdf()
         if filename: # If the user dragged a rectangle
-            return_list = [filename, should_print]
+            return_list.extend([filename, should_print])
             return return_list
         elif text_box.text: # If the user entered a filename
-            return_list = [os.path.join(os.path.dirname(pdf_path), f"{text_box.text}.pdf"), should_print]
+            return_list.extend([os.path.join(os.path.dirname(pdf_path), f"{text_box.text}.pdf"), should_print])
             return return_list
 
     except Exception as e:
@@ -513,4 +513,11 @@ def main(pdf_path, root_arg, template_folder, return_list, testing=False):
 
 
 if __name__ == "__main__":
-    print(main(r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Test\06-30-23_36229.pdf", None, r"C:\Users\jmwesthoff\OneDrive - atlanticconcrete.com\Documents\Scripts\Pewter\Invoices\Test"))
+    return_list = []
+    rectangulator = threading.Thread(target=main, args=(config.TEST_INVOICE, None, config.TEST_TEMPLATE_FOLDER, return_list, False))
+    rectangulator.start()
+    rectangulator.join(timeout=(config.RECTANGULATOR_TIMEOUT / 1000) + 5) 
+    if rectangulator.is_alive():
+        print("Rectangulator timed out")
+    new_filepath, should_print = return_list
+    print(new_filepath, should_print)
