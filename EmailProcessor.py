@@ -8,6 +8,7 @@ import imaplib
 import smtplib
 import random
 import config
+import signal
 import email
 import time
 import os
@@ -33,6 +34,7 @@ class EmailProcessor:
     TEST_INVOICE = config.TEST_INVOICE
     TEST_INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
     TEST_TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
+    RECTANGULATOR_TIMEOUT = (config.RECTANGULATOR_TIMEOUT / 1000) + 5 # must convert to seconds, add 5 second buffer
 
 
     def __init__(self, username, password):
@@ -313,8 +315,16 @@ class EmailProcessor:
         with open(filepath, "wb") as file:
             file.write(attachment)
 
-        # Prompt user to make template
-        new_filepath, should_print = Rectangulator.main(filepath, self, self.TEMPLATE_FOLDER)
+        # Prompt user to make template, timeout if it takes too long
+        return_list = [None, False]
+        rectangulator = threading.Thread(target=Rectangulator.main, args=(filepath, self, self.TEMPLATE_FOLDER, return_list, self.TESTING))
+        rectangulator.start()
+        rectangulator.join(timeout=self.RECTANGULATOR_TIMEOUT) 
+        if rectangulator.is_alive():
+            self.log(f"Rectangulator timed out for '{filename}'", tag="red", send_email=True)
+            os.remove(filepath)
+            return False, None
+        new_filepath, should_print = return_list
 
         # Check if not invoice
         if new_filepath == "not_invoice":

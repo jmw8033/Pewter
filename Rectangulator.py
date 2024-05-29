@@ -37,8 +37,8 @@ class Rectangulator:
         self.fig = fig
         self.ax = ax
 
-        self.rectangles = [] #contains rectangle objects
-        self.coordinates = [] #contains coordinates of rectangle objects
+        self.rectangles = [] # contains rectangle objects
+        self.coordinates = [] # contains coordinates of rectangle objects
         self.correcting_rect_index = None
         self.start_x = None
         self.start_y = None
@@ -381,14 +381,13 @@ def send_email():
             log(f"Error sending email from {sender_email} - {str(e)}")
 
 
-def not_invoice(event):
-    # If the user clicks the "Not Invoice" button, set the global not_invoice to False and close the window
+def not_invoice(event): # If the user clicks the "Not Invoice" button, set the global not_invoice to False and close the window
     global invoice
     invoice = False
     plt.close()
 
 
-def main(pdf_path, root_arg, template_folder, testing=False):
+def main(pdf_path, root_arg, template_folder, return_list, testing=False):
     global log_file
     global root
     global invoice
@@ -415,8 +414,8 @@ def main(pdf_path, root_arg, template_folder, testing=False):
                         invoice_num = get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
                         # Clean the invoice date
                         invoice_date = check_outlier(invoice_name[0], invoice_date).replace("/", "-")
-
-                        return rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf", True
+                        return_list = [rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf", True]
+                        return return_list
             except Exception as e:
                 pass
 
@@ -485,22 +484,32 @@ def main(pdf_path, root_arg, template_folder, testing=False):
         # Create an instance of DraggableRectangle and bind it to the axis
         draggable_rect = Rectangulator(ax, fig, pdf_path, template_folder)
 
-        # Show the plot with the PDF image and rectangles
+
+        # Create a timer to close the plot after a set time
+        timer = fig.canvas.new_timer(interval=config.RECTANGULATOR_TIMEOUT)
+        timer.add_callback(lambda: plt.close())
+        timer.start()
+
+        # Show the plot 
         plt.show()
     
         if not invoice:#  If the user clicked the "Not An Invoice" button
             invoice = True
-            return "not_invoice", should_print
+            return_list = ["not_invoice", should_print]
+            return return_list
         filename = draggable_rect.rename_pdf()
         if filename: # If the user dragged a rectangle
-            return filename, True
+            return_list = [filename, should_print]
+            return return_list
         elif text_box.text: # If the user entered a filename
-            return os.path.join(os.path.dirname(pdf_path), f"{text_box.text}.pdf"), True
+            return_list = [os.path.join(os.path.dirname(pdf_path), f"{text_box.text}.pdf"), should_print]
+            return return_list
 
     except Exception as e:
         log(f"An error occurred while drawing rectangles: {str(e)}")
 
-    return None, False
+    return_list = [None, False]
+    return return_list
 
 
 if __name__ == "__main__":
