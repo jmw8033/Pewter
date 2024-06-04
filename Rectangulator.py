@@ -106,7 +106,6 @@ class Rectangulator:
 
                 # If user says yes, close the window
                 if isinstance(text_is_correct, int) and not isinstance(text_is_correct, bool):
-                    print(text_is_correct)
                     self.correcting_rect_index = text_is_correct
                     log(f"Please reselect {headers[self.correcting_rect_index]}")
                     self.reset_rectangles(specific_rect=self.correcting_rect_index)
@@ -409,6 +408,7 @@ def main(pdf_path, root_arg, template_folder, return_list, testing=False):
 
                     # If company name on invoice matches name on template, use that template
                     if invoice_name[0] == identifier:
+                        print(f"Used template {file} for {identifier}")
                         # Get the invoice date and number from the invoice
                         invoice_date = get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
                         invoice_num = get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
@@ -518,6 +518,5 @@ if __name__ == "__main__":
     rectangulator.start()
     rectangulator.join(timeout=(config.RECTANGULATOR_TIMEOUT / 1000) + 5) 
     if rectangulator.is_alive():
-        print("Rectangulator timed out")
+        log("Rectangulator timed out")
     new_filepath, should_print = return_list
-    print(new_filepath, should_print)
