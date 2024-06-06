@@ -25,6 +25,7 @@ pytesseract.pytesseract.tesseract_cmd = config.PYTESSERACT_PATH
 invoice = True
 log_file = root = None
 should_print = True
+hit_submit = False
 
 class Rectangulator:
 
@@ -391,6 +392,7 @@ def main(pdf_path, root_arg, template_folder, return_list, testing=False):
     global root
     global invoice
     global should_print
+    global hit_submit
     log_file = config.LOG_FILE
     root = root_arg
 
@@ -466,10 +468,19 @@ def main(pdf_path, root_arg, template_folder, return_list, testing=False):
         # Create a text box to manually enter filename
         text_box = TextBox(plt.axes([0.1, 0.05, 0.45, 0.075]), label="", initial="")
         def on_text_submit(text):
+            global hit_submit
+            if hit_submit:
+                return
+            hit_submit = True
             filename_is_correct = AlertWindow(f"Is '{text_box.text}' the correct filename?").get_answer()
+            hit_submit = False
             if filename_is_correct:
                 plt.close()
         text_box.on_submit(on_text_submit)
+
+        # Create a submit button for the text box
+        submit_button = Button(plt.axes([0.45, 0.05, 0.15, 0.075]), "Submit")
+        submit_button.on_clicked(on_text_submit)
 
         # Create text labels for instructions and text box
         text_box_label = fig.text(0.2, 0.14, "Enter Filename (mm-dd-yy_invoice#)", fontsize=10)
@@ -477,13 +488,8 @@ def main(pdf_path, root_arg, template_folder, return_list, testing=False):
         instruction_label_2 = fig.text(0.25, 0.92, "- Company Name can be any piece of text unique to that vendor", fontsize=10)
         instruction_label_3 = fig.text(0.25, 0.90, "- Right click to verify and save", fontsize=10)
 
-        # Create a submit button for the text box
-        submit_button = Button(plt.axes([0.45, 0.05, 0.15, 0.075]), "Submit")
-        submit_button.on_clicked(on_text_submit)
-
         # Create an instance of DraggableRectangle and bind it to the axis
         draggable_rect = Rectangulator(ax, fig, pdf_path, template_folder)
-
 
         # Create a timer to close the plot after a set time
         timer = fig.canvas.new_timer(interval=config.RECTANGULATOR_TIMEOUT)
