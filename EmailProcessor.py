@@ -208,6 +208,10 @@ class EmailProcessor:
                 self.logging_out = False
                 self.start_button.config(state=tk.NORMAL)
                 self.testing_button.config(state=tk.NORMAL)
+        except imaplib.IMAP4.abort as e:
+            self.log(f"Socket error: {str(e)}", tag="red", send_email=False)
+            self.imap = self.connect(log=False)
+            self.restart_processing()
         except Exception as e:  
             self.log(f"An error occurred while searching the inbox: {str(e)}", tag="red", send_email=True)
             self.restart_processing()
