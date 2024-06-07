@@ -335,15 +335,19 @@ def check_outlier(invoice_name, invoice_date):
 
 
 def clean_date(invoice_date):
+    new_date = invoice_date.strip()
     try:
-        date = datetime.strptime(invoice_date, "%m/%d/%y")
-        return date.strftime("%m/%d/%y")
+        date = datetime.strptime(new_date, "%m/%d/%y")
+        new_date = date.strftime("%m/%d/%y")
     except ValueError:
         try:
-            date = datetime.strptime(invoice_date, "%m/%d/%Y")
-            return date.strftime("%m/%d/%y")
+            date = datetime.strptime(new_date, "%m/%d/%Y")
+            new_date = date.strftime("%m/%d/%y")
         except ValueError:
+            log(f"Could not convert {invoice_date} to date")
             return invoice_date
+    print(f"Changed date from {invoice_date} to {new_date}")
+    return new_date
     
 
 def log(*args):
