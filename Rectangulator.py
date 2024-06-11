@@ -320,7 +320,7 @@ def check_outlier(invoice_name, invoice_date):
         invoice_date[0] = calendar[invoice_date[1]]
         invoice_date[1] = day
         return "-".join(invoice_date)
-    elif invoice_name == "Alight Solutions LLC":
+    elif invoice_name in {"Alight Solutions LLC", "Compliance Management International", "Taylor Northeast Inc."}:
         # Uses format "Month DD, YYYY"
         invoice_date = invoice_date.replace(",", "").split(" ")
         invoice_date[0] = calendar2[invoice_date[0]]
