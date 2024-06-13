@@ -34,10 +34,8 @@ class EmailProcessor:
     TEST_INVOICE = config.TEST_INVOICE
     TEST_INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
     TEST_TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
-    RECTANGULATOR_TIMEOUT = (config.RECTANGULATOR_TIMEOUT / 1000) + 5 # must convert to seconds, add 5 second buffer
 
-
-    def __init__(self, username, password):
+    def __init__(self, username, password, rectangulator_handler):
         try:
             # GUI
             self.root = tk.Tk()
@@ -48,6 +46,7 @@ class EmailProcessor:
             # VARIABLES
             self.username = username
             self.password = password
+            self.rectangulator_handler = rectangulator_handler
             self.alert_window = None # used for pop ups
             self.window_closed = None
             self.processor_thread = None
@@ -320,13 +319,14 @@ class EmailProcessor:
 
         # Prompt user to make template, timeout if it takes too long
         return_list = []
-        rectangulator = threading.Thread(target=Rectangulator.main, args=(filepath, self, self.TEMPLATE_FOLDER, return_list, self.TESTING))
-        rectangulator.start()
-        rectangulator.join(timeout=self.RECTANGULATOR_TIMEOUT) 
-        if rectangulator.is_alive():
-            self.log(f"Rectangulator timed out for '{filename}'", tag="red", send_email=True)
+        self.rectangulator_handler.add_to_queue(filepath, self, self.TEMPLATE_FOLDER, return_list, self.TESTING)
+
+        # Check if Rectangulator fails
+        if return_list == [] or return_list[0] == None:
+            self.log(f"Rectangulator failed", tag="red", send_email=True)
             os.remove(filepath)
             return False, None
+        
         new_filepath, should_print = return_list
 
         # Check if not invoice
@@ -334,12 +334,6 @@ class EmailProcessor:
             self.log(f"'{filename}' is not an invoice", tag="blue")
             os.remove(filepath)
             return "not_invoice", [should_print, filepath]
-
-        # Check if Rectangulator fails
-        if new_filepath == None:
-            self.log(f"Rectangulator failed", tag="red", send_email=True)
-            os.remove(filepath)
-            return False, None
         
         # Check if invoice has already been processed
         if os.path.exists(new_filepath):
@@ -558,13 +552,11 @@ class EmailProcessor:
 
     def test_rectangulator(self):
         self.log("Testing Rectangulator...", tag="orange")
-        return_list = [None, False]
-        rectangulator = threading.Thread(target=Rectangulator.main, args=(self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, return_list, True))
-        rectangulator.start()
-        rectangulator.join(timeout=self.RECTANGULATOR_TIMEOUT) 
-        if rectangulator.is_alive():
-            print("Rectangulator timed out")
-        new_filepath, should_print = return_list
+        return_list = []
+        self.rectangulator_handler.add_to_queue(self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, return_list, True)
+        if return_list != []:
+            new_filepath, should_print = return_list
+            self.log(f"new_filepath: {new_filepath}, should_print: {should_print}", tag="orange")
         self.log("Testing complete.", tag="orange")
 
 

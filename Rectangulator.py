@@ -14,6 +14,7 @@ import threading
 import warnings
 import smtplib
 import config
+import time
 import math
 import fitz
 import glob
@@ -22,17 +23,13 @@ import os
 
 warnings.simplefilter("ignore", UserWarning)
 pytesseract.pytesseract.tesseract_cmd = config.PYTESSERACT_PATH
-invoice = True
-log_file = root = None
-should_print = True
-hit_submit = False
 
 class Rectangulator:
 
-    def __init__(self, ax, fig, pdf_path, template_folder):
-        global log_file
-       
+    def __init__(self, ax, fig, pdf_path, template_folder, rectangulator_handler):
         # VARIABLES
+        self.rectangulator_handler = rectangulator_handler
+        self.log_file = rectangulator_handler.log_file
         self.pdf_path = pdf_path
         self.template_folder = template_folder
         self.fig = fig
@@ -86,7 +83,7 @@ class Rectangulator:
         elif event.button == 3:  # Right mouse button
             # Check if 3 rectangles have been drawn
             if len(self.rectangles) != 3:
-                log("Please draw exactly three rectangles")
+                self.rectangulator_handler.log("Please draw exactly three rectangles")
                 self.reset_rectangles()
                 return
             
@@ -102,18 +99,18 @@ class Rectangulator:
                 headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
                 extracted_text = ""
                 for i, rect in enumerate(self.rectangles):
-                    extracted_text += (headers[i] + get_text_in_rect(rect, self.pdf_path) + "\n")
+                    extracted_text += (headers[i] + self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) + "\n")
                 text_is_correct = AlertWindow(f"Does the following text match what you selected?\n\n{extracted_text}", 3).get_answer()
 
                 # If user says yes, close the window
                 if isinstance(text_is_correct, int) and not isinstance(text_is_correct, bool):
                     self.correcting_rect_index = text_is_correct
-                    log(f"Please reselect {headers[self.correcting_rect_index]}")
+                    self.rectangulator_handler.log(f"Please reselect {headers[self.correcting_rect_index]}")
                     self.reset_rectangles(specific_rect=self.correcting_rect_index)
                 elif text_is_correct:
                     plt.close(self.fig)
                 else:
-                    log("Please reselect rectangles")
+                    self.rectangulator_handler.log("Please reselect rectangles")
                     self.reset_rectangles()
 
             input_thread = threading.Thread(target=handle_user_input)
@@ -228,18 +225,18 @@ class Rectangulator:
                 self.save_template()
             
                 # Rename the PDF based on extracted text from rectangles in format "MM-DD-YY_INVOICE_NUMBER"
-                extracted_texts = [get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles if get_text_in_rect(rect, self.pdf_path)]
-                extracted_texts[1] = check_outlier(extracted_texts[0], extracted_texts[1])
+                extracted_texts = [self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles if self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path)]
+                extracted_texts[1] = self.rectangulator_handler.check_outlier(extracted_texts[0], extracted_texts[1])
                 extracted_text_combined = "_".join(extracted_texts[1:])
-                sanitized_extracted_text = sanitize_filename(extracted_text_combined)
+                sanitized_extracted_text = self.rectangulator_handler.sanitize_filename(extracted_text_combined)
                 new_filename = os.path.join(os.path.dirname(self.pdf_path), f"{sanitized_extracted_text}.pdf")
                 return new_filename 
         except RecursionError:
-            log("Window closed please try again")
+            self.rectangulator_handler.log("Window closed please try again")
             return None
         except Exception as e:
-            print(traceback.format_exc())
-            log(f"Error occurred with download, {str(e)}")
+            self.rectangulator_handler.log(traceback.format_exc())
+            self.rectangulator_handler.log(f"Error occurred with download, {str(e)}")
             return None
         
 
@@ -247,161 +244,84 @@ class Rectangulator:
         # Save the template to a text file as Company Name?x?y?width?height and so on
         for i, coord in enumerate(self.coordinates):
             x, y, width, height = coord
-            rect_text = get_text_in_rect(self.rectangles[i], self.pdf_path)
+            rect_text = self.rectangulator_handler.get_text_in_rect(self.rectangles[i], self.pdf_path)
             text = f"{rect_text}?{x}?{y}?{width}?{height}\n"
-            filename = rf"{self.template_folder}\{sanitize_filename(get_text_in_rect(self.rectangles[0], self.pdf_path))}.txt"
+            filename = rf"{self.template_folder}\{self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path))}.txt"
             with open(filename, "a") as file:
                 if i == 0:
-                    file.write(f"{sanitize_filename(rect_text)}?{x}?{y}?{width}?{height}\n")
+                    file.write(f"{self.rectangulator_handler.sanitize_filename(rect_text)}?{x}?{y}?{width}?{height}\n")
                 else:
                     file.write(text)
-        log(f"Created vendor invoice template {get_text_in_rect(self.rectangles[0], self.pdf_path)}")
+        self.rectangulator_handler.log(f"Created vendor invoice template {self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path)}")
 
 
-def sanitize_filename(filename): # Remove invalid characters from the filename
-    sanitized_filename = re.sub(r"[^\w_. -]", "", filename.replace("/", "-"))
-    return sanitized_filename.strip()
+class RectangulatorHandler:
+
+    def __init__(self):
+        self.queue = []
+        self.invoice = True
+        self.log_file = config.LOG_FILE
+        self.should_print = True
+        self.hit_submit = False
+        self.root = None
+        self.processing = False
 
 
-def get_text_in_rect(rect, pdf_path):
-    try:
-        # Retrieve the text within the specified rectangle
-        x = float(rect.get_x())
-        y = float(rect.get_y())
-        width = float(rect.get_width())
-        height = float(rect.get_height())
-
-        # Open the first page of the PDF document and get words
-        doc = fitz.open(pdf_path)
-        page = doc[0]
-        words = page.get_text("words")
-
-        # Find words that fall within the specified rectangle
-        extracted_text = ""
-        for word in words:
-            word_x, word_y, _, _ = word[:4] #get word coordinates
-            if x <= float(word_x) <= x + width and y <= float(word_y) <= y + height:
-                extracted_text += word[4] + " " #append the word to extracted text
-        extracted_text = extracted_text.strip() #remove leading/trailing spaces
-
-        # If no text was extracted, try OCR using pytesseract
-        page_width, page_height = page.rect.width, page.rect.height
-        x, y, width, height = math.ceil(float(x)), math.ceil(float(y)), math.ceil(float(width)), math.ceil(float(height))
-        if extracted_text == "" and x >= 0 and y >= 0 and x + width <= page_width and y + height <= page_height: 
-            pix = page.get_pixmap()
-            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-            # Extract the region of interest and convert to grayscale then use OCR
-            img_region = img_array[y:y + height, x:x + width, :]
-            img_gray = np.mean(img_region, axis=2).astype(np.uint8)
-            extracted_text = pytesseract.image_to_string(img_gray)
-
-        # If OCR fails, set extracted text to ""
-        if extracted_text == None:
-            extracted_text = ""
-
-        return extracted_text
-    except Exception as e:
-        log(f"An error occurred while processing the PDF: {str(e)} {traceback.format_exc()}")
-        return ""
-    finally:
-        doc.close()
+    def add_to_queue(self, pdf_path, root_arg, template_folder, return_list, testing=False):
+        self.queue.append([pdf_path, root_arg, template_folder, return_list, testing])
+        if len(self.queue) == 1 and not self.processing:
+            self.processing = True
+            self.process_queue()
+        else:
+            self.log(f"Added {pdf_path} to queue", root=root_arg)
+            time.sleep(1)
 
 
-def check_outlier(invoice_name, invoice_date):
-    calendar = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04", "May": "05", "Jun": "06", 
-                "Jul": "07", "Aug": "08", "Sep": "09", "Oct": "10", "Nov": "11", "Dec": "12"}
-    calendar2 = {"January": "01", "February": "02", "March": "03", "April": "04", "May": "05", "June": "06", 
-                "July": "07", "Aug": "08", "September": "09", "October": "10", "November": "11", "December": "12"}
     
-    if invoice_name == "BUZZI UNICEM USA - Cement":
-        # Uses format "DD-Month-YY"
-        invoice_date = invoice_date.split("-")
-        day = invoice_date[0]
-        invoice_date[0] = calendar[invoice_date[1]]
-        invoice_date[1] = day
-        return "-".join(invoice_date)
-    elif invoice_name in {"Alight Solutions LLC", "Compliance Management International", "Taylor Northeast Inc."}:
-        # Uses format "Month DD, YYYY"
-        invoice_date = invoice_date.replace(",", "").split(" ")
-        invoice_date[0] = calendar2[invoice_date[0]]
-        invoice_date = "/".join(invoice_date)
-    elif invoice_name in {"ADP SCREENING  SELECTION SERVICES", "Muka Development Group Llc"}:
-        # Uses format "Mon DD, YYYY"
-        invoice_date = invoice_date.replace(",", "").split(" ")
-        invoice_date[0] = calendar[invoice_date[0]]
-        invoice_date = "/".join(invoice_date)
-    
-    return clean_date(invoice_date)
+    def process_queue(self):
+        while self.queue:
+            pdf_path, root_arg, template_folder, return_list, testing = self.queue.pop(0)
+            return_list = self.main(pdf_path, root_arg, template_folder, return_list, testing)
+        
+        self.processing = False
 
 
-def clean_date(invoice_date):
-    new_date = invoice_date.strip()
-    try:
-        date = datetime.strptime(new_date, "%m/%d/%y")
-        new_date = date.strftime("%m/%d/%y")
-    except ValueError:
+    def main(self, pdf_path, root_arg, template_folder, return_list, testing=False):
+        self.root = root_arg
+
+        # Iterate through invoice templates and check for one that matches the invoice
+        if not testing:
+            template_exists = self.check_templates(pdf_path, template_folder, return_list)
+            if template_exists:
+                return return_list
+
+        # If no template exists, make one
         try:
-            date = datetime.strptime(new_date, "%m/%d/%Y")
-            new_date = date.strftime("%m/%d/%y")
-        except ValueError:
-            log(f"Could not convert {invoice_date} to date")
-            return invoice_date
-    print(f"Changed date from {invoice_date} to {new_date}")
-    return new_date
-    
+            if not testing:
+                self.send_template_email() # email me
 
-def log(*args):
-    global log_file
-    global root
-    with open(log_file, "a") as file:
-        message = "#RECTANGULATOR# " + " ".join([str(arg) for arg in args]) 
-        if root:
-            root.log(message, tag="purple")
-        file.write("\n".join([str(arg) for arg in args]))
-        print(message)
+            rectangulator, text_box = self.setup_page(pdf_path, template_folder) # setup all elements on page
+        
+            if not self.invoice:#  if the user clicked the "Not An Invoice" button
+                self.invoice = True
+                return_list.extend(["not_invoice", self.should_print])
+                return return_list
+            filename = rectangulator.rename_pdf()
+            if filename: # if the user dragged a rectangle
+                return_list.extend([filename, self.should_print])
+                return return_list
+            elif text_box.text: # if the user entered a filename
+                return_list.extend([os.path.join(os.path.dirname(pdf_path), f"{text_box.text}.pdf"), self.should_print])
+                return return_list
 
+        except Exception as e:
+            self.log(f"An error occurred while drawing rectangles: {str(e)}")
 
-def send_email():
-    global root
-    if root == None or root.TESTING:
-        return
-    try:
-        sender_email = f"{root.username}{config.ADDRESS}"
-
-        # Create a multipart message
-        message = MIMEMultipart()
-        message["Subject"] = "Must create template"
-        message["From"] = sender_email
-        message["To"] = config.RECIEVER_EMAIL
-        message.attach(MIMEText("Must create template", "plain"))
-
-        # Send the email
-        with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
-            server.starttls()
-            server.login(sender_email, root.password)
-            server.sendmail(sender_email, config.RECIEVER_EMAIL, message.as_string())
-            log(f"Template request sent from {sender_email} to {config.RECIEVER_EMAIL}")
-    except Exception as e:
-            log(f"Error sending email from {sender_email} - {str(e)}")
+        return_list = [None, False]
+        return return_list
 
 
-def not_invoice(event): # If the user clicks the "Not Invoice" button, set the global not_invoice to False and close the window
-    global invoice
-    invoice = False
-    plt.close()
-
-
-def main(pdf_path, root_arg, template_folder, return_list, testing=False):
-    global log_file
-    global root
-    global invoice
-    global should_print
-    global hit_submit
-    log_file = config.LOG_FILE
-    root = root_arg
-
-    # Iterate through invoice templates and check for one that matches the invoice
-    if not testing:
+    def check_templates(self, pdf_path, template_folder, return_list):            
         for file in glob.glob(rf"{template_folder}\*.txt"):
             try:
                 with open(file, "r") as f:
@@ -410,123 +330,225 @@ def main(pdf_path, root_arg, template_folder, return_list, testing=False):
                     invoice_date = f.readline().split("?")
                     invoice_num = f.readline().split("?")
                     # Get the company name from the invoice
-                    identifier = sanitize_filename(get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path))
+                    identifier = self.sanitize_filename(self.get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path))
 
                     # If company name on invoice matches name on template, use that template
                     if invoice_name[0] == identifier:
-                        print(f"Used template {file} for {identifier}")
+                        self.log(f"Used template {file} for {identifier}")
                         # Get the invoice date and number from the invoice
-                        invoice_date = get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
-                        invoice_num = get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
+                        invoice_date = self.get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
+                        invoice_num = self.get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
                         # Clean the invoice date
-                        invoice_date = check_outlier(invoice_name[0], invoice_date).replace("/", "-")
+                        invoice_date = self.check_outlier(invoice_name[0], invoice_date).replace("/", "-")
                         return_list.extend([rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf", True])
                         return return_list
             except Exception as e:
                 pass
 
-    # If no template exists, make one
-    try:
-        if not testing:
-            send_email() # email me
 
-        # Draw rectangles on the PDF image for annotation
-        doc = fitz.open(pdf_path)
-        page = doc[0]
+    def setup_page(self, pdf_path, template_folder):
+            # Draw rectangles on the PDF image for annotation
+            doc = fitz.open(pdf_path)
+            page = doc[0]
 
-        # Convert the page to a NumPy array for plotting
-        pix = page.get_pixmap()
-        global img_array
-        img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+            # Convert the page to a NumPy array for plotting
+            pix = page.get_pixmap()
+            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
 
-        # Create a matplotlib figure and axis for displaying the image
-        fig, ax = plt.subplots(figsize=(9, 9))
-        plt.subplots_adjust(bottom=0.2)
-        ax.imshow(img_array)
+            # Create a matplotlib figure and axis for displaying the image
+            fig, ax = plt.subplots(figsize=(9, 9))
+            plt.subplots_adjust(bottom=0.2)
+            ax.imshow(img_array)
 
-        # Create a Not An Invoice button
-        button = Button(plt.axes([0.65, 0.05, 0.2, 0.075]), "Not An Invoice")
-        button.on_clicked(not_invoice)
+            # Create a Not An Invoice button
+            button = Button(plt.axes([0.65, 0.05, 0.2, 0.075]), "Not An Invoice")
+            button.on_clicked(self.not_invoice)
 
-        # Create a checkbox for if it should be printed
-        printCheckBox = CheckButtons(plt.axes([0.9, 0.065, 0.03, 0.03]), [""], [True])
-        def print_callback(label):
-            global should_print
-            should_print = not should_print
-        printCheckBox.on_clicked(print_callback)
-        for i, line in enumerate(printCheckBox.lines):
-            rect = printCheckBox.rectangles[i]
-            rect.set_width(0.5)
-            rect.set_height(0.5)
-            rect.set_edgecolor("none")
-            # Calculate the center of the rectangle
-            center_x = rect.get_x() + rect.get_width() / 2
-            center_y = rect.get_y() + rect.get_height() / 2
-            # Update the line positions to be centered
-            line[0].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
-            line[1].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
-            line[0].set_ydata([center_y - rect.get_height() / 4, center_y + rect.get_height() / 4])
-            line[1].set_ydata([center_y + rect.get_height() / 4, center_y - rect.get_height() / 4])
-        printLabel = fig.text(0.896, 0.1, "Print?", fontsize=10)
+            # Create a checkbox for if it should be printed
+            printCheckBox = CheckButtons(plt.axes([0.9, 0.065, 0.03, 0.03]), [""], [True])
+            def print_callback(label):
+                self.should_print = not self.should_print
+            printCheckBox.on_clicked(print_callback)
+            for i, line in enumerate(printCheckBox.lines):
+                rect = printCheckBox.rectangles[i]
+                rect.set_width(0.5)
+                rect.set_height(0.5)
+                rect.set_edgecolor("none")
+                # Calculate the center of the rectangle
+                center_x = rect.get_x() + rect.get_width() / 2
+                center_y = rect.get_y() + rect.get_height() / 2
+                # Update the line positions to be centered
+                line[0].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
+                line[1].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
+                line[0].set_ydata([center_y - rect.get_height() / 4, center_y + rect.get_height() / 4])
+                line[1].set_ydata([center_y + rect.get_height() / 4, center_y - rect.get_height() / 4])
+            printLabel = fig.text(0.896, 0.1, "Print?", fontsize=10)
 
-        # Create a text box to manually enter filename
-        text_box = TextBox(plt.axes([0.1, 0.05, 0.45, 0.075]), label="", initial="")
-        def on_text_submit(text):
-            global hit_submit
-            if hit_submit:
-                return
-            hit_submit = True
-            filename_is_correct = AlertWindow(f"Is '{text_box.text}' the correct filename?").get_answer()
-            hit_submit = False
-            if filename_is_correct:
-                plt.close()
-        text_box.on_submit(on_text_submit)
+            # Create a text box to manually enter filename
+            text_box = TextBox(plt.axes([0.1, 0.05, 0.45, 0.075]), label="", initial="")
+            def on_text_submit(text):
+                if self.hit_submit:
+                    return
+                self.hit_submit = True
+                filename_is_correct = AlertWindow(f"Is '{text_box.text}' the correct filename?").get_answer()
+                self.hit_submit = False
+                if filename_is_correct:
+                    plt.close()
+            text_box.on_submit(on_text_submit)
 
-        # Create a submit button for the text box
-        submit_button = Button(plt.axes([0.45, 0.05, 0.15, 0.075]), "Submit")
-        submit_button.on_clicked(on_text_submit)
+            # Create a submit button for the text box
+            submit_button = Button(plt.axes([0.45, 0.05, 0.15, 0.075]), "Submit")
+            submit_button.on_clicked(on_text_submit)
 
-        # Create text labels for instructions and text box
-        text_box_label = fig.text(0.2, 0.14, "Enter Filename (mm-dd-yy_invoice#)", fontsize=10)
-        instruction_label = fig.text(0.25, 0.94, "- Draw boxes around Company Name, Date, and Invoice (in that order)", fontsize=10)
-        instruction_label_2 = fig.text(0.25, 0.92, "- Company Name can be any piece of text unique to that vendor", fontsize=10)
-        instruction_label_3 = fig.text(0.25, 0.90, "- Right click to verify and save", fontsize=10)
+            # Create text labels for instructions and text box
+            text_box_label = fig.text(0.2, 0.14, "Enter Filename (mm-dd-yy_invoice#)", fontsize=10)
+            instruction_label = fig.text(0.25, 0.94, "- Draw boxes around Company Name, Date, and Invoice (in that order)", fontsize=10)
+            instruction_label_2 = fig.text(0.25, 0.92, "- Company Name can be any piece of text unique to that vendor", fontsize=10)
+            instruction_label_3 = fig.text(0.25, 0.90, "- Right click to verify and save", fontsize=10)
 
-        # Create an instance of DraggableRectangle and bind it to the axis
-        draggable_rect = Rectangulator(ax, fig, pdf_path, template_folder)
+            # Create an instance of the Rectangulator and bind it to the axis
+            rectangulator = Rectangulator(ax, fig, pdf_path, template_folder, self)
 
-        # Create a timer to close the plot after a set time
-        timer = fig.canvas.new_timer(interval=config.RECTANGULATOR_TIMEOUT)
-        timer.add_callback(lambda: plt.close())
-        timer.start()
+            # Create a timer to close the plot after a set time
+            timer = fig.canvas.new_timer(interval=config.RECTANGULATOR_TIMEOUT)
+            timer.add_callback(lambda: plt.close())
+            timer.start()
 
-        # Show the plot 
-        plt.show()
-    
-        if not invoice:#  If the user clicked the "Not An Invoice" button
-            invoice = True
-            return_list.extend(["not_invoice", should_print])
-            return return_list
-        filename = draggable_rect.rename_pdf()
-        if filename: # If the user dragged a rectangle
-            return_list.extend([filename, should_print])
-            return return_list
-        elif text_box.text: # If the user entered a filename
-            return_list.extend([os.path.join(os.path.dirname(pdf_path), f"{text_box.text}.pdf"), should_print])
-            return return_list
+            # Show the plot 
+            plt.show()
+            return rectangulator, text_box
 
-    except Exception as e:
-        log(f"An error occurred while drawing rectangles: {str(e)}")
 
-    return_list = [None, False]
-    return return_list
+    def sanitize_filename(self, filename): # Remove invalid characters from the filename
+        sanitized_filename = re.sub(r"[^\w_. -]", "", filename.replace("/", "-"))
+        return sanitized_filename.strip()
+
+
+    def get_text_in_rect(self, rect, pdf_path):
+        try:
+            # Retrieve the text within the specified rectangle
+            x = float(rect.get_x())
+            y = float(rect.get_y())
+            width = float(rect.get_width())
+            height = float(rect.get_height())
+
+            # Open the first page of the PDF document and get words
+            doc = fitz.open(pdf_path)
+            page = doc[0]
+            words = page.get_text("words")
+
+            # Find words that fall within the specified rectangle
+            extracted_text = ""
+            for word in words:
+                word_x, word_y, _, _ = word[:4] #get word coordinates
+                if x <= float(word_x) <= x + width and y <= float(word_y) <= y + height:
+                    extracted_text += word[4] + " " #append the word to extracted text
+            extracted_text = extracted_text.strip() #remove leading/trailing spaces
+
+            # If no text was extracted, try OCR using pytesseract
+            page_width, page_height = page.rect.width, page.rect.height
+            x, y, width, height = math.ceil(float(x)), math.ceil(float(y)), math.ceil(float(width)), math.ceil(float(height))
+            if extracted_text == "" and x >= 0 and y >= 0 and x + width <= page_width and y + height <= page_height: 
+                pix = page.get_pixmap()
+                img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+                # Extract the region of interest and convert to grayscale then use OCR
+                img_region = img_array[y:y + height, x:x + width, :]
+                img_gray = np.mean(img_region, axis=2).astype(np.uint8)
+                extracted_text = pytesseract.image_to_string(img_gray)
+
+            # If OCR fails, set extracted text to ""
+            if extracted_text == None:
+                extracted_text = ""
+
+            return extracted_text
+        except Exception as e:
+            self.log(f"An error occurred while processing the PDF: {str(e)} {traceback.format_exc()}")
+            return ""
+        finally:
+            doc.close()
+
+
+    def check_outlier(self, invoice_name, invoice_date):
+        calendar = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04", "May": "05", "Jun": "06", 
+                    "Jul": "07", "Aug": "08", "Sep": "09", "Oct": "10", "Nov": "11", "Dec": "12"}
+        calendar2 = {"January": "01", "February": "02", "March": "03", "April": "04", "May": "05", "June": "06", 
+                    "July": "07", "Aug": "08", "September": "09", "October": "10", "November": "11", "December": "12"}
+        
+        if invoice_name == "BUZZI UNICEM USA - Cement":
+            # Uses format "DD-Month-YY"
+            invoice_date = invoice_date.split("-")
+            day = invoice_date[0]
+            invoice_date[0] = calendar[invoice_date[1]]
+            invoice_date[1] = day
+            return "-".join(invoice_date)
+        elif invoice_name in {"Alight Solutions LLC", "Compliance Management International", "Taylor Northeast Inc."}:
+            # Uses format "Month DD, YYYY"
+            invoice_date = invoice_date.replace(",", "").split(" ")
+            invoice_date[0] = calendar2[invoice_date[0]]
+            invoice_date = "/".join(invoice_date)
+        elif invoice_name in {"ADP SCREENING  SELECTION SERVICES", "Muka Development Group Llc"}:
+            # Uses format "Mon DD, YYYY"
+            invoice_date = invoice_date.replace(",", "").split(" ")
+            invoice_date[0] = calendar[invoice_date[0]]
+            invoice_date = "/".join(invoice_date)
+        
+        return self.clean_date(invoice_date)
+
+
+    def clean_date(self, invoice_date):
+        new_date = invoice_date.strip()
+        try:
+            date = datetime.strptime(new_date, "%m/%d/%y")
+            new_date = date.strftime("%m/%d/%y")
+        except ValueError:
+            try:
+                date = datetime.strptime(new_date, "%m/%d/%Y")
+                new_date = date.strftime("%m/%d/%y")
+            except ValueError:
+                self.log(f"Could not convert {invoice_date} to date")
+                return invoice_date
+        self.log(f"Changed date from {invoice_date} to {new_date}")
+        return new_date
+        
+
+    def log(self, *args, root=None):
+        with open(self.log_file, "a") as file:
+            message = "#RECTANGULATOR# " + " ".join([str(arg) for arg in args]) 
+            if root:
+                root.log(message, tag="purple")
+            elif self.root:
+                self.root.log(message, tag="purple")
+            file.write("\n".join([str(arg) for arg in args]))
+            print(message)
+
+
+    def send_template_email(self):
+        if self.root == None or self.root.TESTING:
+            return
+        try:
+            sender_email = f"{self.root.username}{config.ADDRESS}"
+
+            # Create a multipart message
+            message = MIMEMultipart()
+            message["Subject"] = "Must create template"
+            message["From"] = sender_email
+            message["To"] = config.RECIEVER_EMAIL
+            message.attach(MIMEText("Must create template", "plain"))
+
+            # Send the email
+            with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
+                server.starttls()
+                server.login(sender_email, self.root.password)
+                server.sendmail(sender_email, config.RECIEVER_EMAIL, message.as_string())
+                self.log(f"Template request sent from {sender_email} to {config.RECIEVER_EMAIL}")
+        except Exception as e:
+                self.log(f"Error sending email from {sender_email} - {str(e)}")
+
+
+    def not_invoice(self, event): # If the user clicks the "Not Invoice" button, set the global not_invoice to False and close the window
+        self.invoice = False
+        plt.close()
 
 
 if __name__ == "__main__":
-    return_list = []
-    rectangulator = threading.Thread(target=main, args=(config.TEST_INVOICE, None, config.TEST_TEMPLATE_FOLDER, return_list, False))
-    rectangulator.start()
-    rectangulator.join(timeout=(config.RECTANGULATOR_TIMEOUT / 1000) + 5) 
-    if rectangulator.is_alive():
-        log("Rectangulator timed out")
-    new_filepath, should_print = return_list
+    pass
