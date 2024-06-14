@@ -1,19 +1,14 @@
 import Rectangulator
 import Loginulator
-import win32print
 import threading
 import traceback
-import win32api
 import imaplib
 import smtplib
-import random
 import config
-import signal
 import email
 import time
 import os
 import tkinter as tk
-from Alertinator import AlertWindow
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -220,41 +215,41 @@ class EmailProcessor:
         subject = ""
         try: 
             # Fetch email
-            msg = self.get_msg(mail)
+            msg = self.get_msg(mail, "inbox")
             subject = msg["Subject"]
             sender_email = email.utils.parseaddr(msg["From"])[1]
 
             # Check if sender is trusted
             if not sender_email.endswith(self.TRUSTED_ADDRESS):
-                self.move_email(mail, "Not_Invoices")
+                self.move_email(mail, "Not_Invoices", "inbox")
                 return
             
             # Check for attachments
             has_attachment = any(part.get("content-disposition", "").startswith("attachment") for part in msg.walk() if msg.is_multipart())
-            is_invoice = True
             if not has_attachment:
                 attachment_error = self.handle_login(mail)
-            else:            
-                # Handle attachments
-                attachment_error, is_invoice = self.handle_attachments(mail)
-
-            # Move to invoices label if no errors
-            if not attachment_error:
-                if is_invoice:
-                    self.move_email(mail, "Invoices")
-                else:
-                    self.move_email(mail, "Not_Invoices")
             else:
-                self.log(f"'{subject}' failed to download, moved to Error label", tag="red", send_email=True)
-                self.move_email(mail, "Errors")
+                self.move_email(mail, "Queued", "inbox")
+                self.handle_attachments(self.get_email("Queued"))
 
         except Exception as e:
             self.log(f"An error occurred while processing an email: {str(e)} \n {traceback.format_exc()}", tag="red", send_email=True)
-            self.move_email(mail, "Errors")
+            self.move_email(mail, "Errors", "inbox")
             return
         
 
-    def handle_login(self, mail): # Handles login emails
+    def get_email(self, label):
+        try:
+            self.imap.select(label)
+            _, data = self.imap.search(None, "ALL")
+            email_id = data[0].split()[-1]
+            return email_id
+        except Exception as e:
+            self.log(f"An error occurred while getting email: {str(e)}", tag="red", send_email=True)
+            return None
+
+
+    def handle_login(self, mail): # Handles login emails - not implemented
         msg = self.get_msg(mail)
         subject = msg["Subject"]
         filepaths = Loginulator.get_filepaths(msg)
@@ -277,31 +272,20 @@ class EmailProcessor:
 
 
     def handle_attachments(self, mail): # Iterate over email parts and find pdf
-        msg = self.get_msg(mail)
-        has_error = False
-        is_invoice = True
+        msg = self.get_msg(mail, "Queued")
         filenames = []
         for part in msg.walk():
             if part.get_filename() not in filenames and part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
                 filenames.append(part.get_filename())
-                # Check if download is successful and if it is an invoice
-                invoice_downloaded, filepath = self.download_invoice(part)
-                if invoice_downloaded == "not_invoice":
-                    is_invoice = False
-                    should_print, filepath = filepath
-                    if should_print:
-                        self.print_invoice(filepath, mail)
-                    continue
-                elif not invoice_downloaded:
-                    has_error = True
-                    continue
-            
-                if not self.TESTING and invoice_downloaded:
-                    self.print_invoice(filepath, mail)
-        return has_error, is_invoice
+                self.download_invoice(mail, part)
+        self.download_invoice("End", None)
 
 
-    def download_invoice(self, part): # Downloads invoice PDF
+    def download_invoice(self, mail, part): # Downloads invoice PDF
+        if mail == "End": # tell rectangulator to process the invoices
+            self.rectangulator_handler.add_to_queue("End", None, None, self, None, None, None)
+            return
+
         # Get fllename and attachment
         filename = part.get_filename()
         attachment = part.get_payload(decode=True)
@@ -319,54 +303,14 @@ class EmailProcessor:
 
         # Prompt user to make template, timeout if it takes too long
         return_list = []
-        self.rectangulator_handler.add_to_queue(filepath, self, self.TEMPLATE_FOLDER, return_list, self.TESTING)
-
-        # Check if Rectangulator fails
-        if return_list == [] or return_list[0] == None:
-            self.log(f"Rectangulator failed", tag="red", send_email=True)
-            os.remove(filepath)
-            return False, None
-        
-        new_filepath, should_print = return_list
-
-        # Check if not invoice
-        if new_filepath == "not_invoice":
-            self.log(f"'{filename}' is not an invoice", tag="blue")
-            os.remove(filepath)
-            return "not_invoice", [should_print, filepath]
-        
-        # Check if invoice has already been processed
-        if os.path.exists(new_filepath):
-            old_filepath = new_filepath
-            self.log(f"New invoice file already exists at {old_filepath}", tag="orange")
-            new_filepath = f"{old_filepath[:-4]}_{str(int(time.time()))}.pdf"
-            os.rename(old_filepath, new_filepath)
-            return True, new_filepath
-        
-        # Save invoice
-        os.rename(filepath, new_filepath)
-        self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {self.current_date} {self.current_time}", tag="blue")
-        return True, new_filepath
-        
-
-    def print_invoice(self, filepath, mail): # Printer
-        try:
-            # Get default printer and print
-            p = win32print.GetDefaultPrinter()
-            win32api.ShellExecute(0, "print", filepath, None,  ".",  0)
-            self.log(f"Printed {os.path.basename(filepath)} completed successfully.", tag="blue")
-            return True
-        except Exception as e:
-            self.move_email(mail, "Need_Print")
-            self.log(f"Printing failed: {str(e)}", tag="red", send_email=True)
-            return False
+        self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, return_list, self.TESTING)
 
 
-    def move_email(self, mail, label): # Moves emails to labels
+    def move_email(self, mail, label, og_label): # Moves emails to labels
         subject = "Unknown"
         try:
             # Get msg and subject if possible
-            msg = self.get_msg(mail)
+            msg = self.get_msg(mail, og_label)
             if msg:
                 subject = msg["Subject"]
 
@@ -377,6 +321,7 @@ class EmailProcessor:
             self.imap.store(mail, "+FLAGS", "\\Deleted")
             self.imap.expunge()
             self.log(f"Email '{subject}' moved to {label}.", tag="blue")
+            return copy
         except Exception as e:
             self.log(f"Email '{subject}' transfer failed: {str(e)}", tag="red", send_email=True)
 
@@ -390,7 +335,7 @@ class EmailProcessor:
 
             # Create a multipart message and set headers
             message = MIMEMultipart()
-            message["Subject"] = "Error Alert"
+            message["Subject"] = "Alert"
             message["From"] = sender_email
             message["To"] = self.RECIEVER_EMAIL
             message.attach(MIMEText(body, "plain"))
@@ -400,7 +345,6 @@ class EmailProcessor:
                 server.starttls()
                 server.login(sender_email, self.password)
                 server.sendmail(sender_email, self.RECIEVER_EMAIL, message.as_string())
-                self.log(f"Email sent to {self.RECIEVER_EMAIL}", tag="gray")
         except Exception as e:
                 self.log(f"Error sending email - {str(e)}", tag="red")
 
@@ -449,8 +393,9 @@ class EmailProcessor:
                 self.log(f"An error occurred while checking the label: {str(e)}", tag="red", send_email=True)
         
     
-    def get_msg(self, mail):
+    def get_msg(self, mail, label):
         try:
+            self.imap.select(label)
             _, data = self.imap.fetch(mail, "(RFC822)")
             raw_email = data[0][1]
             msg = email.message_from_bytes(raw_email)
@@ -483,7 +428,7 @@ class EmailProcessor:
 
             # Move emails back to inbox
             for email_id in email_ids:
-                self.move_email(email_id, "inbox")
+                self.move_email(email_id, "inbox", "Errors")
         except Exception as e:
             self.log(f"Error resolving errors: {str(e)}", tag="red", send_email=True)
 
@@ -500,7 +445,7 @@ class EmailProcessor:
 
             # Move emails back to inbox
             for email_id in email_ids:
-                self.move_email(email_id, "inbox")
+                self.move_email(email_id, "inbox", "Need_Print")
         except Exception as e:
             self.log(f"Error resolving unprinted invoices: {str(e)}", tag="red", send_email=True)
 
@@ -553,7 +498,7 @@ class EmailProcessor:
     def test_rectangulator(self):
         self.log("Testing Rectangulator...", tag="orange")
         return_list = []
-        self.rectangulator_handler.add_to_queue(self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, return_list, True)
+        self.rectangulator_handler.add_to_queue(None, None, self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, return_list, True)
         if return_list != []:
             new_filepath, should_print = return_list
             self.log(f"new_filepath: {new_filepath}, should_print: {should_print}", tag="orange")

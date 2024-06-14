@@ -9,11 +9,14 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 import pytesseract
+import win32print
+import win32api
 import traceback
 import threading
 import warnings
 import smtplib
 import config
+import email
 import time
 import math
 import fitz
@@ -264,43 +267,157 @@ class RectangulatorHandler:
         self.should_print = True
         self.hit_submit = False
         self.root = None
-        self.processing = False
+        self.queue_loop = threading.Thread(target=self.process_queue)
+        self.queue_loop.start()
+        self.current_email = None
+        self.current_email_dest = None
 
 
-    def add_to_queue(self, pdf_path, root_arg, template_folder, return_list, testing=False):
-        self.queue.append([pdf_path, root_arg, template_folder, return_list, testing])
-        if len(self.queue) == 1 and not self.processing:
-            self.processing = True
-            self.process_queue()
-        else:
-            self.log(f"Added {pdf_path} to queue", root=root_arg)
-            time.sleep(1)
+    def set_dest_label(self, label):
+        if self.current_email_dest not in {"Errors", "Need_Print", "Not_Invoice"}:
+            self.current_email_dest = label
 
+
+    def add_to_queue(self, mail, filename, filepath, root, template_folder, return_list, testing=False):
+        print(mail, self.current_email, self.current_email_dest)
+        if mail == "End":
+            self.queue.append([mail, filename, filepath, root, template_folder, return_list, testing])
+            return
+
+        if testing and mail == None:
+            self.main(filename, filepath, root, template_folder, return_list, testing)
+            return            
+
+        # first check if template exists
+        template_exists = self.check_templates(filepath, template_folder, return_list, root)
+        if template_exists:
+            new_filepath = template_exists[0]
+            self.current_email = mail
+            self.set_dest_label("Invoices")
+            if os.path.exists(filepath): # check if file already exists
+                self.log(f"New invoice file already exists at {filepath}", tag="orange", root=root)
+                new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
+            os.rename(filepath, new_filepath)
+            if not testing:
+                self.print_invoice(new_filepath, root)
+            return
+
+        # otherwise add to queue
+        self.queue.append([mail, filename, filepath, root, template_folder, return_list, testing])
+        self.log(f"Template required for {filename}  --- {root.current_time} {root.current_date}", root=root)
 
     
     def process_queue(self):
-        while self.queue:
-            pdf_path, root_arg, template_folder, return_list, testing = self.queue.pop(0)
-            return_list = self.main(pdf_path, root_arg, template_folder, return_list, testing)
-        
-        self.processing = False
+        while True:
+            try:
+                if len(self.queue) == 0:
+                    time.sleep(5)
+                    continue
+                mail, filename, filepath, root, template_folder, return_list, testing = self.queue.pop(0)
+                if mail == "End":
+                    self.move_email(self.current_email, self.current_email_dest, "Queued", root)
+                    self.current_email = None
+                    self.current_email_dest = None
+                    continue
+                else:
+                    self.current_email = mail
 
 
-    def main(self, pdf_path, root_arg, template_folder, return_list, testing=False):
-        self.root = root_arg
+                return_list = self.main(filename, filepath, root, template_folder, return_list, testing)
 
-        # Iterate through invoice templates and check for one that matches the invoice
-        if not testing:
-            template_exists = self.check_templates(pdf_path, template_folder, return_list)
-            if template_exists:
-                return return_list
+                # Check if Rectangulator fails
+                if return_list == [] or return_list[0] == None:
+                    self.log(f"Rectangulator failed", tag="red", send_email=True, root=root)
+                    os.remove(filepath)
+                    subject = self.get_msg(mail, "Queued", root)["Subject"]
+                    self.log(f"'{subject}' failed to download, moved to Error label", tag="red", send_email=True, root=root)
+                    self.set_dest_label("Errors")
+                    continue
+                
+                new_filepath, should_print = return_list
+                if testing:
+                    should_print = False
+
+                # Check if not invoice
+                if new_filepath == "not_invoice":
+                    self.log(f"'{filename}' is not an invoice", tag="blue", root=root)
+                    if should_print:
+                        self.print_invoice(filepath, root)
+                    os.remove(filepath)
+                    self.set_dest_label("Not_Invoices")
+                    continue
+                
+                # Check if invoice has already been processed
+                if os.path.exists(new_filepath):
+                    old_filepath = new_filepath
+                    self.log(f"New invoice file already exists at {os.path.basename(old_filepath)}", tag="orange", root=root)
+                    new_filepath = f"{old_filepath[:-4]}_{str(int(time.time()))}.pdf"
+                
+                # Save invoice
+                os.rename(filepath, new_filepath)
+                self.set_dest_label("Invoices")
+                self.print_invoice(new_filepath, root)
+                self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {root.current_date} {root.current_time}", tag="blue", root=root)
+
+            except Exception as e:
+                self.log(f"An error occurred while processing the queue: {str(e)}", tag="red", send_email=True, root=root)
+
+    
+    def print_invoice(self, filepath, root): # Printer
+        try:
+            # Get default printer and print
+            p = win32print.GetDefaultPrinter()
+            win32api.ShellExecute(0, "print", filepath, None,  ".",  0)
+            self.log(f"Printed {os.path.basename(filepath)} completed successfully.", tag="blue", root=root)
+            return True
+        except Exception as e:
+            self.set_dest_label("Need_Print")
+            self.log(f"Printing failed for {filepath}: {str(e)}", tag="red", send_email=True, root=root)
+            return False
+
+
+    def move_email(self, mail, label, og_label, root): # Moves emails to labels
+        subject = "Unknown"
+        try:
+            # Get msg and subject if possible
+            root.imap.select(og_label)
+            msg = self.get_msg(mail, og_label, root)
+            if msg:
+                subject = msg["Subject"]
+
+            # Make a copy of the email in the specified label
+            copy = root.imap.copy(mail, label)
+
+            # Mark the original email as deleted
+            root.imap.store(mail, "+FLAGS", "\\Deleted")
+            root.imap.expunge()
+            self.log(f"Email '{subject}' moved to {label}.", tag="blue", root=root)
+        except Exception as e:
+            self.log(f"Email '{subject}' transfer failed: {str(e)}", tag="red", send_email=True, root=root)
+
+
+    def get_msg(self, mail, label, root):
+        try:
+            print(f"het its {mail}")
+            root.imap.select(label)
+            _, data = root.imap.fetch(mail, "(RFC822)")
+            raw_email = data[0][1]
+            msg = email.message_from_bytes(raw_email)
+            return msg
+        except Exception as e:
+            self.log(f"Error getting message: {str(e)}", root=root, tag="red", send_email=True)
+            return None
+
+
+    def main(self, filename, filepath, root, template_folder, return_list, testing=False):
+        self.root = root
 
         # If no template exists, make one
         try:
             if not testing:
-                self.send_template_email() # email me
+                self.send_email("Must create template", root) # email me
 
-            rectangulator, text_box = self.setup_page(pdf_path, template_folder) # setup all elements on page
+            rectangulator, text_box = self.setup_page(filepath, template_folder) # setup all elements on page
         
             if not self.invoice:#  if the user clicked the "Not An Invoice" button
                 self.invoice = True
@@ -311,17 +428,17 @@ class RectangulatorHandler:
                 return_list.extend([filename, self.should_print])
                 return return_list
             elif text_box.text: # if the user entered a filename
-                return_list.extend([os.path.join(os.path.dirname(pdf_path), f"{text_box.text}.pdf"), self.should_print])
+                return_list.extend([os.path.join(os.path.dirname(filepath), f"{text_box.text}.pdf"), self.should_print])
                 return return_list
 
         except Exception as e:
-            self.log(f"An error occurred while drawing rectangles: {str(e)}")
+            self.log(f"An error occurred while drawing rectangles: {str(e)}", tag="red", root=root)
 
         return_list = [None, False]
         return return_list
 
 
-    def check_templates(self, pdf_path, template_folder, return_list):            
+    def check_templates(self, pdf_path, template_folder, return_list, root):            
         for file in glob.glob(rf"{template_folder}\*.txt"):
             try:
                 with open(file, "r") as f:
@@ -334,13 +451,13 @@ class RectangulatorHandler:
 
                     # If company name on invoice matches name on template, use that template
                     if invoice_name[0] == identifier:
-                        self.log(f"Used template {file} for {identifier}")
+                        self.log(f"Used template {file} for {identifier}", root=root)
                         # Get the invoice date and number from the invoice
                         invoice_date = self.get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
                         invoice_num = self.get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
                         # Clean the invoice date
                         invoice_date = self.check_outlier(invoice_name[0], invoice_date).replace("/", "-")
-                        return_list.extend([rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf", True])
+                        return_list.extend([rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf"])
                         return return_list
             except Exception as e:
                 pass
@@ -417,6 +534,19 @@ class RectangulatorHandler:
             # Show the plot 
             plt.show()
             return rectangulator, text_box
+
+
+    def get_email(self, label, root):
+        try:
+            # Get the email with the specified label
+            root.imap.select(label)
+            _, data = root.imap.search(None, "ALL")
+            mail = data[0].split()[-1]
+            return mail
+        except Exception as e:
+            self.log(f"Error getting email from {label}: {str(e)}", tag="red", root=root)
+            return
+
 
 
     def sanitize_filename(self, filename): # Remove invalid characters from the filename
@@ -507,38 +637,42 @@ class RectangulatorHandler:
             except ValueError:
                 self.log(f"Could not convert {invoice_date} to date")
                 return invoice_date
-        self.log(f"Changed date from {invoice_date} to {new_date}")
+        if new_date != invoice_date:
+            self.log(f"Changed date from {invoice_date} to {new_date}")
         return new_date
         
 
-    def log(self, *args, root=None):
+    def log(self, *args, tag="purple", send_email=False, root=None):
         with open(self.log_file, "a") as file:
-            message = "#RECTANGULATOR# " + " ".join([str(arg) for arg in args]) 
+            message = "--- RECTANGULATOR --- " + " ".join([str(arg) for arg in args]) 
             if root:
-                root.log(message, tag="purple")
+                root.log(message, tag=tag, send_email=send_email)
             elif self.root:
-                self.root.log(message, tag="purple")
+                self.root.log(message, tag=tag, send_email=send_email)
+            if send_email:
+                self.send_email(message, root)
             file.write("\n".join([str(arg) for arg in args]))
             print(message)
 
 
-    def send_template_email(self):
-        if self.root == None or self.root.TESTING:
+    def send_email(self, body, root):
+        if root.TESTING:
             return
+        
         try:
             sender_email = f"{self.root.username}{config.ADDRESS}"
 
             # Create a multipart message
             message = MIMEMultipart()
-            message["Subject"] = "Must create template"
+            message["Subject"] = "Alert"
             message["From"] = sender_email
             message["To"] = config.RECIEVER_EMAIL
-            message.attach(MIMEText("Must create template", "plain"))
+            message.attach(MIMEText(body, "plain"))
 
             # Send the email
             with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
                 server.starttls()
-                server.login(sender_email, self.root.password)
+                server.login(sender_email, root.password)
                 server.sendmail(sender_email, config.RECIEVER_EMAIL, message.as_string())
                 self.log(f"Template request sent from {sender_email} to {config.RECIEVER_EMAIL}")
         except Exception as e:
