@@ -32,8 +32,9 @@ you need a different invoice name format.
 * ADDRESS: Email address domain (ex. @gmail.com).
 * PYTESSERACT_PATH: Path to pytesseract
 * CHROMEDRIVER_PATH: Path to chromedriver
-* WAIT_TIME = Cycle time for searching inbox (in seconds).
-* RECONNECT_CYCLE_COUNT = Number of cycles until it reconnects to email (ex. 3600 / WAIT_TIME would be one hour).
+* INBOX_CYCLE_TIME = Cycle time for searching inbox (in seconds).
+* QUEUE_CYCLE_TIME = Cycle time for rectangulator checking the queue (in seconds).
+* RECONNECT_CYCLE_COUNT = Number of cycles until it reconnects to email (ex. 3600 / INBOX_CYCLE_TIME would be one hour).
 * RECTANGULATOR_TIMEOUT = Timeout time for rectangulator (in milliseconds).
 
 ## Contributing
