@@ -24,7 +24,7 @@ class EmailProcessor:
     RECIEVER_EMAIL = config.RECIEVER_EMAIL
     TRUSTED_ADDRESS = config.TRUSTED_ADDRESS
     ADDRESS = config.ADDRESS
-    WAIT_TIME = config.WAIT_TIME
+    CYCLE_TIME = config.INBOX_CYCLE_TIME
     RECONNECT_CYCLE_COUNT = config.RECONNECT_CYCLE_COUNT
     TEST_INVOICE = config.TEST_INVOICE
     TEST_INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
@@ -186,7 +186,7 @@ class EmailProcessor:
                         self.check_labels(["Need_Print", "Need_Login", "Errors"])
 
                         # Pause until next cycle
-                        self.pause_event.wait(timeout=self.WAIT_TIME)
+                        self.pause_event.wait(timeout=self.CYCLE_TIME)
                     else:
                         self.process_email(emails[0].split()[0])
 
@@ -237,17 +237,6 @@ class EmailProcessor:
             self.move_email(mail, "Errors", "inbox")
             return
         
-
-    def get_email(self, label):
-        try:
-            self.imap.select(label)
-            _, data = self.imap.search(None, "ALL")
-            email_id = data[0].split()[-1]
-            return email_id
-        except Exception as e:
-            self.log(f"An error occurred while getting email: {str(e)}", tag="red", send_email=True)
-            return None
-
 
     def handle_login(self, mail): # Handles login emails - not implemented
         msg = self.get_msg(mail)
@@ -347,6 +336,17 @@ class EmailProcessor:
                 server.sendmail(sender_email, self.RECIEVER_EMAIL, message.as_string())
         except Exception as e:
                 self.log(f"Error sending email - {str(e)}", tag="red")
+
+
+    def get_email(self, label):
+        try:
+            self.imap.select(label)
+            _, data = self.imap.search(None, "ALL")
+            email_id = data[0].split()[-1]
+            return email_id
+        except Exception as e:
+            self.log(f"An error occurred while getting email: {str(e)}", tag="red", send_email=True)
+            return None
 
 
     def log(self, *args, tag=None, send_email=False): # Logs to text box and log file
