@@ -54,7 +54,7 @@ class RectangulatorHandler:
             self.current_email = mail
             self.set_dest_label("Invoices")
             if os.path.exists(new_filepath): # check if file already exists
-                self.log(f"New invoice file already exists at {filepath}", tag="orange", root=root)
+                self.log(f"New invoice file already exists at {new_filepath}", tag="orange", root=root)
                 new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
             os.rename(filepath, new_filepath)
             self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {root.current_date} {root.current_time}", tag="blue", root=root)
@@ -263,7 +263,6 @@ class RectangulatorHandler:
 
 
     def set_dest_label(self, label): # Set the destination label for the current email
-
         if self.current_email_dest not in {"Errors", "Need_Print", "Not_Invoice"}:
             self.current_email_dest = label
 
