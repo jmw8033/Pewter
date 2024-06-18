@@ -295,7 +295,7 @@ class RectangulatorHandler:
             # Mark the original email as deleted
             root.imap.store(mail, "+FLAGS", "\\Deleted")
             root.imap.expunge()
-            self.log(f"Email '{subject}' moved to {label}.", tag="blue", root=root)
+            self.log(f"Email '{subject}' moved from {og_label} to {label}.", tag="blue", root=root)
         except Exception as e:
             self.log(f"Email '{subject}' transfer failed: {str(e)}", tag="red", send_email=True, root=root)
 
