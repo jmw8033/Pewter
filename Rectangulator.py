@@ -39,7 +39,6 @@ class RectangulatorHandler:
 
 
     def add_to_queue(self, mail, filename, filepath, root, template_folder, return_list, testing=False): # Add a file to the queue, or process it immediately if template exists
-        print(mail, self.current_email, self.current_email_dest)
         if mail == "End": # signal to end the current email and move to correct label
             self.queue.append([mail, filename, filepath, root, template_folder, return_list, testing])
             return
@@ -54,10 +53,11 @@ class RectangulatorHandler:
             new_filepath = template_exists[0]
             self.current_email = mail
             self.set_dest_label("Invoices")
-            if os.path.exists(filepath): # check if file already exists
+            if os.path.exists(new_filepath): # check if file already exists
                 self.log(f"New invoice file already exists at {filepath}", tag="orange", root=root)
                 new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
             os.rename(filepath, new_filepath)
+            self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {root.current_date} {root.current_time}", tag="blue", root=root)
             if not testing:
                 self.print_invoice(new_filepath, root)
             return
@@ -116,8 +116,8 @@ class RectangulatorHandler:
                 # Save invoice
                 os.rename(filepath, new_filepath)
                 self.set_dest_label("Invoices")
-                self.print_invoice(new_filepath, root)
                 self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {root.current_date} {root.current_time}", tag="blue", root=root)
+                self.print_invoice(new_filepath, root)
 
             except Exception as e:
                 self.log(f"An error occurred while processing the queue: {str(e)}", tag="red", send_email=True, root=root)
@@ -303,7 +303,6 @@ class RectangulatorHandler:
 
     def get_msg(self, mail, label, root): # Get the message from the specified email
         try:
-            print(f"het its {mail}")
             root.imap.select(label)
             _, data = root.imap.fetch(mail, "(RFC822)")
             raw_email = data[0][1]
