@@ -406,12 +406,16 @@ class RectangulatorHandler:
         
 
     def send_email(self, body, root): # Email me
-        if root.TESTING:
-            return
-        
+        if root:
+            sender_email = f"{root.username}{config.ADDRESS}"
+            password = root.password
+            if root.TESTING:
+                return
+        else:
+            sender_email = f"{config.ACP_USER}{config.ADDRESS}"
+            password = config.ACP_PASS
+            
         try:
-            sender_email = f"{self.root.username}{config.ADDRESS}"
-
             # Create a multipart message
             message = MIMEMultipart()
             message["Subject"] = "Alert"
@@ -422,11 +426,11 @@ class RectangulatorHandler:
             # Send the email
             with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
                 server.starttls()
-                server.login(sender_email, root.password)
+                server.login(sender_email, password)
                 server.sendmail(sender_email, config.RECIEVER_EMAIL, message.as_string())
                 self.log(f"Template request sent from {sender_email} to {config.RECIEVER_EMAIL}")
         except Exception as e:
-                self.log(f"Error sending email from {sender_email} - {str(e)}")
+                self.log(f"Error sending email {body} - {str(e)}")
 
 
     def not_invoice(self, event): # If the user clicks the "Not Invoice" button
