@@ -473,7 +473,6 @@ class EmailProcessor:
         self.disconnect()
         self.processor_thread = None
         self.main()
-        self.log("Restarted.", tag="orange", send_email=True)
 
    
     def logout(self): # Logs out
