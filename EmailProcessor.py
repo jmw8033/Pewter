@@ -2,6 +2,7 @@ import Rectangulator
 import Loginulator
 import threading
 import traceback
+import ctypes
 import imaplib
 import smtplib
 import config
@@ -188,6 +189,7 @@ class EmailProcessor:
                         # Pause until next cycle
                         self.pause_event.wait(timeout=self.CYCLE_TIME)
                     else:
+                        self.flash_taskbar()
                         self.process_email(emails[0].split()[0])
 
                     cycle_count += 1
@@ -522,6 +524,10 @@ class EmailProcessor:
 
         # Destroys tkinter window 
         self.root.destroy()
+
+
+    def flash_taskbar(self): # Flash icon in taskbar
+        ctypes.windll.user32.FlashWindow(ctypes.windll.kernel32.GetConsoleWindow(), True)
 
 
     @property
