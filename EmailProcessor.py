@@ -272,7 +272,7 @@ class EmailProcessor:
 
     def download_invoice(self, mail, part): # Downloads invoice PDF
         if mail == "End": # tell rectangulator to process the invoices
-            self.rectangulator_handler.add_to_queue("End", None, None, self, None, None, None)
+            self.rectangulator_handler.add_to_queue("End", None, None, self, None, None)
             return
 
         # Get fllename and attachment
@@ -291,8 +291,7 @@ class EmailProcessor:
             file.write(attachment)
 
         # Prompt user to make template, timeout if it takes too long
-        return_list = []
-        self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, return_list, self.TESTING)
+        self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, self.TESTING)
 
 
     def move_email(self, mail, label, og_label): # Moves emails to labels
