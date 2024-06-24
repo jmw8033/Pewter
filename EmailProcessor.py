@@ -278,7 +278,7 @@ class EmailProcessor:
 
 
     def add_to_queue(self, mail, part, testing=False): # Adds invoice to Rectangulator queue
-        if mail == "End": # tell rectangulator its the end of the email (since there could be multiple attachments)
+        if mail == "End": # tell rectangulator it's the end of the email (since there could be multiple attachments)
             self.rectangulator_handler.add_to_queue("End", None, None, self, None, None)
             return
 
