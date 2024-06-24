@@ -42,16 +42,16 @@ class RectangulatorHandler:
         if mail == "End": # signal to end the current email and move to correct label
             self.queue.append([mail, filename, filepath, root, template_folder, testing])
             return
+
+        if testing and mail == None: # when specifically pressing the test rectangulator button
+            self.rectangulate(filename, filepath, root, template_folder, testing)
+            return   
         
         if filename.startswith("Test_"): # when specifically pressing the test inbox button
             self.rectangulate(filename, filepath, root, template_folder, testing)
             self.move_email(mail, "Test_Email", "Queued", root)
             os.remove(filepath)
-            return
-
-        if testing and mail == None: # when specifically pressing the test rectangulator button
-            self.rectangulate(filename, filepath, root, template_folder, testing)
-            return            
+            return         
 
         # check if template exists and use it
         template_exists = self.check_templates(filepath, template_folder, root)
@@ -137,7 +137,7 @@ class RectangulatorHandler:
 
             rectangulator, text_box = self.open_rectangulator(filepath, template_folder, root) # get filename from rectangulator
         
-            if filename.startswith("Test_"): # if using text inbox
+            if filename and filename.startswith("Test_"): # if using text inbox
                 return []
             if not rectangulator and not text_box: # if the window was closed
                 return []

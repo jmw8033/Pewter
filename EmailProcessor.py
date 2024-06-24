@@ -509,7 +509,7 @@ class EmailProcessor:
     def test_rectangulator(self): # Opens rectangulator with test invoice
         self.log("Testing Rectangulator...", tag="orange")
         return_list = []
-        self.rectangulator_handler.add_to_queue(None, None, self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, return_list, True)
+        self.rectangulator_handler.add_to_queue(None, None, self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, True)
         if return_list != []:
             new_filepath, should_print = return_list
             self.log(f"new_filepath: {new_filepath}, should_print: {should_print}", tag="orange")
