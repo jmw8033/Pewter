@@ -16,3 +16,5 @@ if __name__ == "__main__":
     # APC
     apc_email_processor = threading.Thread(target=EmailProcessor, args=(config.APC_USER, config.APC_PASS, rectangulator_handler))
     apc_email_processor.start()
+
+    print("It's Pewtering Time")
