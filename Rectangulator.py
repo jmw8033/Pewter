@@ -42,6 +42,12 @@ class RectangulatorHandler:
         if mail == "End": # signal to end the current email and move to correct label
             self.queue.append([mail, filename, filepath, root, template_folder, testing])
             return
+        
+        if filename.startswith("Test_"): # when specifically pressing the test inbox button
+            self.rectangulate(filename, filepath, root, template_folder, testing)
+            self.move_email(mail, "Test_Email", "Queued", root)
+            os.remove(filepath)
+            return
 
         if testing and mail == None: # when specifically pressing the test rectangulator button
             self.rectangulate(filename, filepath, root, template_folder, testing)
@@ -125,14 +131,14 @@ class RectangulatorHandler:
     
     def rectangulate(self, filename, filepath, root, template_folder, testing=False): # Main function for the Rectangulator
         self.root = root
-
-        # If no template exists, make one
         try:
             if not testing:
                 self.send_email("Must create template", root) # email me
 
-            rectangulator, text_box = self.setup_page(filepath, template_folder, root) # setup all elements on page
+            rectangulator, text_box = self.open_rectangulator(filepath, template_folder, root) # get filename from rectangulator
         
+            if filename.startswith("Test_"): # if using text inbox
+                return []
             if not rectangulator and not text_box: # if the window was closed
                 return []
             if not self.invoice:#  if the user clicked the "Not An Invoice" button
@@ -154,27 +160,32 @@ class RectangulatorHandler:
         for file in glob.glob(rf"{template_folder}\*.txt"):
             try:
                 with open(file, "r") as f:
-                    # Get the invoice name, date, and number from the template
-                    invoice_name = f.readline().split("?")
-                    invoice_date = f.readline().split("?")
-                    invoice_num = f.readline().split("?")
-                    # Get the company name from the invoice
-                    identifier = self.sanitize_filename(self.get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path))
+                    while True:
+                        # Get the invoice name, date, and number from the template
+                        invoice_name = f.readline().split("?")
+                        invoice_date = f.readline().split("?")
+                        invoice_num = f.readline().split("?")
 
-                    # If company name on invoice matches name on template, use that template
-                    if invoice_name[0] == identifier:
-                        self.log(f"Used template {file} for {identifier}")
-                        # Get the invoice date and number from the invoice
-                        invoice_date = self.get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
-                        invoice_num = self.get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
-                        # Clean the invoice date
-                        invoice_date = self.check_date_outlier(invoice_name[0], invoice_date).replace("/", "-")
-                        return [rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf"]
+                        if not invoice_name or not invoice_date or not invoice_num: 
+                            break
+
+                        # Get the company name from the invoice
+                        identifier = self.sanitize_filename(self.get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path))
+
+                        # If company name on invoice matches name on template, use that template
+                        if invoice_name[0] == identifier:
+                            self.log(f"Used template {file} for {identifier}")
+                            # Get the invoice date and number from the invoice
+                            invoice_date = self.get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
+                            invoice_num = self.get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
+                            # Clean the invoice date
+                            invoice_date = self.check_date_outlier(invoice_name[0], invoice_date).replace("/", "-")
+                            return [rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf"]
             except Exception as e:
                 pass
 
 
-    def setup_page(self, pdf_path, template_folder, root): # Setup the page for the Rectangulator
+    def open_rectangulator(self, pdf_path, template_folder, root): # Setup the page for the Rectangulator and return the Rectangulator and textbox
             doc = fitz.open(pdf_path)
             page = doc[0]
 

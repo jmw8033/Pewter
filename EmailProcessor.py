@@ -56,7 +56,7 @@ class EmailProcessor:
             self.button_frame = tk.Frame(self.root)
             self.button_frame.pack(side=tk.TOP)
 
-            self.start_button = tk.Button(self.button_frame, text="Start Process", command=self.main) # start process button
+            self.start_button = tk.Button(self.button_frame, text="Start", command=self.main) # start process button
             self.start_button.pack(side=tk.LEFT, padx=1)
 
             self.pause_button = tk.Button(self.button_frame, text="Pause", command=self.pause_processing, state=tk.DISABLED) # pause button
@@ -79,6 +79,9 @@ class EmailProcessor:
 
             self.test_rectangulator_button = tk.Button(self.button_frame, text="Test Rectangulator", command=self.test_rectangulator, state=tk.NORMAL) # test rectangulator button
             self.test_rectangulator_button.pack(side=tk.LEFT, padx=1)
+
+            self.test_inbox_button = tk.Button(self.button_frame, text="Test Inbox", command=self.test_inbox, state=tk.DISABLED) # test inbox button
+            self.test_inbox_button.pack(side=tk.LEFT, padx=1)
 
             scrollbar = tk.Scrollbar(self.root)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -109,7 +112,7 @@ class EmailProcessor:
         
 
     def main(self): # Runs when start button is pressed 
-        if self.TESTING: # testing mode
+        if self.TESTING:
             self.TEMPLATE_FOLDER = self.TEST_TEMPLATE_FOLDER
             self.INVOICE_FOLDER = self.TEST_INVOICE_FOLDER
             self.log("Testing mode enabled", tag="orange")
@@ -123,9 +126,10 @@ class EmailProcessor:
         self.pause_button.config(text="Pause", command=self.pause_processing, state=tk.NORMAL)
         self.pause_event.clear()
         self.logout_button.config(state=tk.NORMAL)
-        self.testing_button.config(state=tk.DISABLED)
         self.errors_button.config(state=tk.NORMAL)
         self.print_errors_button.config(state=tk.NORMAL)
+        self.testing_button.config(state=tk.DISABLED)
+        self.test_inbox_button.config(state=tk.NORMAL)
         
         # Imap login
         self.imap = self.connect()
@@ -137,7 +141,6 @@ class EmailProcessor:
     def connect(self, log=True): # returns imap object
         user = f"{self.username}{self.ADDRESS}"
         try:
-            # Login to email
             imap = imaplib.IMAP4_SSL(self.IMAP_SERVER)
             imap.login(user, self.password)
             self.connected = True
@@ -157,7 +160,6 @@ class EmailProcessor:
 
     def disconnect(self, log=True):
         try:
-            # Logout
             self.imap.logout()
             self.connected = False
             if log:
@@ -167,7 +169,7 @@ class EmailProcessor:
                 self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", send_email=True)   
                 self.disconnect(log=False) # try again after 5 seconds 
             else:
-                # If disconnecting isn't working, were probably already disconnected
+                # if disconnecting isn't working, were probably already disconnected
                 self.log(f"Disconnecting isn't working: {str(e)}", tag="red")
 
 
@@ -183,11 +185,8 @@ class EmailProcessor:
                     # Check if no new mail
                     if not emails[0]:
                         self.log(f"No new emails - {self.current_time} {self.current_date}", tag="no_new_emails")
-
                         self.check_labels(["Need_Print", "Need_Login", "Errors"])
-
-                        # Pause until next cycle
-                        self.pause_event.wait(timeout=self.CYCLE_TIME)
+                        self.pause_event.wait(timeout=self.CYCLE_TIME)  # pause until next cycle
                     else:
                         self.flash_taskbar()
                         self.process_email(emails[0].split()[0])
@@ -264,15 +263,21 @@ class EmailProcessor:
 
     def handle_attachments(self, mail): # Iterate over email parts and find pdf
         msg = self.get_msg(mail, "Queued")
+        subject = msg["Subject"]
         filenames = []
+
         for part in msg.walk():
             if part.get_filename() not in filenames and part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
                 filenames.append(part.get_filename())
-                self.download_invoice(mail, part)
-        self.download_invoice("End", None)
+                if subject == "Test":
+                    self.download_invoice(mail, part, testing=True)
+                else:
+                    self.download_invoice(mail, part)
+        if subject != "Test":
+            self.download_invoice("End", None)
 
 
-    def download_invoice(self, mail, part): # Downloads invoice PDF
+    def download_invoice(self, mail, part, testing=False): # Downloads invoice PDF
         if mail == "End": # tell rectangulator to process the invoices
             self.rectangulator_handler.add_to_queue("End", None, None, self, None, None)
             return
@@ -291,6 +296,11 @@ class EmailProcessor:
         # Download invoice PDF
         with open(filepath, "wb") as file:
             file.write(attachment)
+
+        if testing: # When testing inbox
+            filename = f"Test_{filename}"
+            self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, self.TESTING)
+            return
 
         # Prompt user to make template, timeout if it takes too long
         self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, self.TESTING)
@@ -456,7 +466,7 @@ class EmailProcessor:
         self.pause_button.config(text="Resume", command=self.resume_processing)
         self.errors_button.config(state=tk.DISABLED)
         self.print_errors_button.config(state=tk.DISABLED)
-        self.test_rectangulator_button.config(state=tk.DISABLED)
+        self.test_inbox_button.config(state=tk.DISABLED)
         self.pause_event.set()
 
 
@@ -465,7 +475,7 @@ class EmailProcessor:
         self.pause_button.config(text="Pause", command=self.pause_processing)
         self.errors_button.config(state=tk.NORMAL)
         self.print_errors_button.config(state=tk.NORMAL)
-        self.test_rectangulator_button.config(state=tk.NORMAL)
+        self.test_inbox_button.config(state=tk.NORMAL)
         self.pause_event.clear()
 
  
@@ -481,6 +491,7 @@ class EmailProcessor:
         self.pause_button.config(state=tk.DISABLED)
         self.errors_button.config(state=tk.DISABLED)
         self.logout_button.config(state=tk.DISABLED)
+        self.test_inbox_button.config(state=tk.DISABLED)
         self.pause_event.set()
         self.processor_running = False
         self.logging_out = True
@@ -495,7 +506,7 @@ class EmailProcessor:
             self.testing_button.config(bg="#CCFFCC")
 
 
-    def test_rectangulator(self):
+    def test_rectangulator(self): # Opens rectangulator with test invoice
         self.log("Testing Rectangulator...", tag="orange")
         return_list = []
         self.rectangulator_handler.add_to_queue(None, None, self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, return_list, True)
@@ -503,6 +514,12 @@ class EmailProcessor:
             new_filepath, should_print = return_list
             self.log(f"new_filepath: {new_filepath}, should_print: {should_print}", tag="orange")
         self.log("Testing complete.", tag="orange")
+
+
+    def test_inbox(self): # Sends test email to inbox, won't be printed or downloaded
+        self.log("Sending test email to inbox", tag="orange")
+        mail = self.get_email("Test_Email")
+        self.move_email(mail, "inbox", "Test_Email")
 
 
     def reconnect(self): # Reconnects to imap
