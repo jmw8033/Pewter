@@ -283,16 +283,14 @@ class RectangulatorHandler:
 
 
     def log(self, *args, tag="purple", send_email=False, root=None): # Log messages to a file and optionally send an email
-        with open(self.log_file, "a") as file:
-            message = "--- RECTANGULATOR --- " + " ".join([str(arg) for arg in args]) 
-            if root:
-                root.log(message, tag=tag, send_email=send_email)
-            elif self.root:
-                self.root.log(message, tag=tag, send_email=send_email)
-            if send_email:
-                self.send_email(message, root)
-            file.write("\n".join([str(arg) for arg in args]))
-            print(message)
+        message = "--- RECTANGULATOR --- " + " ".join([str(arg) for arg in args]) 
+        if root:
+            root.log(message, tag=tag, send_email=send_email)
+        elif self.root:
+            self.root.log(message, tag=tag, send_email=send_email)
+        if send_email:
+            self.send_email(message, root)
+        print(message)
 
 
     def move_email(self, mail, label, og_label, root): # Moves email to label
