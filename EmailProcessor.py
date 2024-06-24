@@ -138,7 +138,7 @@ class EmailProcessor:
             self.processor_thread.start()
 
 
-    def connect(self, log=True): # returns imap object
+    def connect(self, log=True): # Connects email, returns imap object
         user = f"{self.username}{self.ADDRESS}"
         try:
             imap = imaplib.IMAP4_SSL(self.IMAP_SERVER)
@@ -158,7 +158,7 @@ class EmailProcessor:
             return self.connect(self.username, self.password, log=False)
         
 
-    def disconnect(self, log=True):
+    def disconnect(self, log=True): # Disconnects email
         try:
             self.imap.logout()
             self.connected = False
@@ -169,11 +169,11 @@ class EmailProcessor:
                 self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", send_email=True)   
                 self.disconnect(log=False) # try again after 5 seconds 
             else:
-                # if disconnecting isn't working, were probably already disconnected
+                # If disconnecting isn't working, were probably already disconnected
                 self.log(f"Disconnecting isn't working: {str(e)}", tag="red")
 
 
-    def search_inbox(self): # Main Loop - searches inbox for new emails
+    def search_inbox(self): # Main Loop, searches inbox for new emails
         try:
             cycle_count = 0
             while self.processor_running:
@@ -239,7 +239,7 @@ class EmailProcessor:
             return
         
 
-    def handle_login(self, mail): # Handles login emails - not implemented
+    def handle_login(self, mail): # Handles login emails, not implemented
         msg = self.get_msg(mail)
         subject = msg["Subject"]
         filepaths = Loginulator.get_filepaths(msg)
@@ -270,23 +270,22 @@ class EmailProcessor:
             if part.get_filename() not in filenames and part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
                 filenames.append(part.get_filename())
                 if subject == "Test":
-                    self.download_invoice(mail, part, testing=True)
+                    self.add_to_queue(mail, part, testing=True)
                 else:
-                    self.download_invoice(mail, part)
+                    self.add_to_queue(mail, part)
         if subject != "Test":
-            self.download_invoice("End", None)
+            self.add_to_queue("End", None)
 
 
-    def download_invoice(self, mail, part, testing=False): # Downloads invoice PDF
-        if mail == "End": # tell rectangulator to process the invoices
+    def add_to_queue(self, mail, part, testing=False): # Adds invoice to Rectangulator queue
+        if mail == "End": # tell rectangulator its the end of the email (since there could be multiple attachments)
             self.rectangulator_handler.add_to_queue("End", None, None, self, None, None)
             return
 
         # Get fllename and attachment
         filename = part.get_filename()
-        attachment = part.get_payload(decode=True)
-
         filepath = os.path.join(self.INVOICE_FOLDER, filename)
+        attachment = part.get_payload(decode=True)
         
         # Check if file already exists
         if os.path.exists(filepath):
@@ -297,7 +296,7 @@ class EmailProcessor:
         with open(filepath, "wb") as file:
             file.write(attachment)
 
-        if testing: # When testing inbox
+        if testing: # when testing inbox
             filename = f"Test_{filename}"
             self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, self.TESTING)
             return
@@ -306,7 +305,7 @@ class EmailProcessor:
         self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, self.TESTING)
 
 
-    def move_email(self, mail, label, og_label): # Moves emails to labels
+    def move_email(self, mail, label, og_label): # Moves email to label
         subject = "Unknown"
         try:
             # Get msg and subject if possible
@@ -326,13 +325,12 @@ class EmailProcessor:
             self.log(f"Email '{subject}' transfer failed: {str(e)}", tag="red", send_email=True)
 
 
-    def send_email(self, body):
+    def send_email(self, body): # Sends email to me
+        sender_email = f"{self.username}{self.ADDRESS}"
         try:
             if self.TESTING:
                 return 
-            
-            sender_email = f"{self.username}{self.ADDRESS}"
-
+                
             # Create a multipart message and set headers
             message = MIMEMultipart()
             message["Subject"] = "Alert"
@@ -349,7 +347,7 @@ class EmailProcessor:
                 self.log(f"Error sending email - {str(e)}", tag="red")
 
 
-    def get_email(self, label):
+    def get_email(self, label): # Gets most recent email in label
         try:
             self.imap.select(label)
             _, data = self.imap.search(None, "ALL")
@@ -362,9 +360,9 @@ class EmailProcessor:
 
     def log(self, *args, tag=None, send_email=False): # Logs to text box and log file
         try:
-            if self.window_closed: #check if window is still open
+            if self.window_closed: # check if window is still open
                 return
-            message = " ".join([str(arg) for arg in args]) #convert args to string
+            message = " ".join([str(arg) for arg in args]) # convert args to string
 
             # Get rid of no_new_emails messages
             if tag == "no_new_emails":
@@ -404,7 +402,7 @@ class EmailProcessor:
                 self.log(f"An error occurred while checking the label: {str(e)}", tag="red", send_email=True)
         
     
-    def get_msg(self, mail, label):
+    def get_msg(self, mail, label): # Gets email message
         try:
             self.imap.select(label)
             _, data = self.imap.fetch(mail, "(RFC822)")
@@ -417,12 +415,12 @@ class EmailProcessor:
 
 
     def remove_messages(self, message): # Removes no_new_emails messages
-        message = message[:-22] #cuts out the date-time
+        message = message[:-22] # cuts out the date-time
 
         # Searches for every no_new_emails message then deletes it
         index = self.log_text_widget.search(message, "1.0", tk.END)
         while index:
-            self.log_text_widget.delete(index, f"{index}+{len(message)+1+22}c") #+1 for new line, +22 for date-time
+            self.log_text_widget.delete(index, f"{index}+{len(message) + 23}c") # +1 for new line, +22 for date-time
             index = self.log_text_widget.search(message, "1.0", tk.END)
             self.root.update()
 
@@ -497,7 +495,7 @@ class EmailProcessor:
         self.logging_out = True
 
    
-    def toggle_testing(self):
+    def toggle_testing(self): # Toggles testing mode
         if self.TESTING:
             self.TESTING = False
             self.testing_button.config(bg="#FFCCCC")
@@ -522,13 +520,14 @@ class EmailProcessor:
         self.move_email(mail, "inbox", "Test_Email")
 
 
-    def reconnect(self): # Reconnects to imap
+    def reconnect(self): # Reconnects to email
         self.disconnect(log=False)
         self.imap = self.connect(log=False)
         self.log(f"Reconnected to {self.username} - {self.current_time} {self.current_date}", tag="green")
 
 
-    def on_program_exit(self): # Runs when program is closed
+    def on_program_exit(self): # Runs when program is closed, disconnects and closes window
+        print("Program closed")
         self.log("Disconnecting...", tag="red")
         self.root.update()
         self.window_closed = True
