@@ -173,7 +173,7 @@ class RectangulatorHandler:
                         identifier = self.sanitize_filename(self.get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path))
 
                         # If company name on invoice matches name on template, use that template
-                        if invoice_name[0] == identifier:
+                        if identifier.strip() and invoice_name[0] == identifier:
                             self.log(f"Used template {file} for {identifier}")
                             # Get the invoice date and number from the invoice
                             invoice_date = self.get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)

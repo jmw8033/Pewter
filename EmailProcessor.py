@@ -2,7 +2,6 @@ import Rectangulator
 import Loginulator
 import threading
 import traceback
-import ctypes
 import imaplib
 import smtplib
 import config
@@ -10,6 +9,7 @@ import email
 import time
 import os
 import tkinter as tk
+import win32gui
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -319,7 +319,7 @@ class EmailProcessor:
             # Mark the original email as deleted
             self.imap.store(mail, "+FLAGS", "\\Deleted")
             self.imap.expunge()
-            self.log(f"Email '{subject}' moved to {label}.", tag="blue")
+            self.log(f"Email '{subject}' moved from {og_label} to {label}.", tag="blue")
             return copy
         except Exception as e:
             self.log(f"Email '{subject}' transfer failed: {str(e)}", tag="red", send_email=True)
@@ -543,7 +543,9 @@ class EmailProcessor:
 
 
     def flash_taskbar(self): # Flash icon in taskbar
-        ctypes.windll.user32.FlashWindow(ctypes.windll.kernel32.GetConsoleWindow(), True)
+        # Code from stack overflow
+        hwnd_int = int(self.root.frame(), base=16)
+        win32gui.FlashWindow(hwnd_int, 0)
 
 
     @property
