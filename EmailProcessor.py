@@ -319,10 +319,10 @@ class EmailProcessor:
             # Mark the original email as deleted
             self.imap.store(mail, "+FLAGS", "\\Deleted")
             self.imap.expunge()
-            self.log(f"Email '{subject}' moved from {og_label} to {label}.", tag="blue")
+            self.log(f"Moved email '{subject}' from {og_label} to {label}.", tag="blue")
             return copy
         except Exception as e:
-            self.log(f"Email '{subject}' transfer failed: {str(e)}", tag="red", send_email=True)
+            self.log(f"Transfer failed for '{subject}': {str(e)}", tag="red", send_email=True)
 
 
     def send_email(self, body): # Sends email to me

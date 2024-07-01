@@ -95,7 +95,7 @@ class RectangulatorHandler:
                 if return_list == [] or return_list[0] == None:
                     self.log(f"Rectangulator failed", tag="red", send_email=True, root=root)
                     subject = self.get_subject(mail, "Queued", root)
-                    self.log(f"File '{filename}' from {subject} failed to download, moved to Error label, not printed", tag="red", send_email=True, root=root)
+                    self.log(f"Failed to download '{filename}' from {subject}, moved to Error label, not printed", tag="red", send_email=True, root=root)
                     self.set_dest_label("Errors")
                     os.remove(filepath)
                     continue
@@ -106,7 +106,7 @@ class RectangulatorHandler:
 
                 # Check if not invoice
                 if new_filepath == "not_invoice":
-                    self.log(f"'{filename}' is not an invoice", tag="blue", root=root)
+                    self.log(f"Marked not an invoice for '{filename}'", tag="blue", root=root)
                     if should_print:
                         self.print_invoice(filepath, root)
                     os.remove(filepath)
@@ -305,9 +305,9 @@ class RectangulatorHandler:
             # Mark the original email as deleted
             root.imap.store(mail, "+FLAGS", "\\Deleted")
             root.imap.expunge()
-            self.log(f"Email '{subject}' moved from {og_label} to {label}.", tag="blue", root=root)
+            self.log(f"Moved email '{subject}' from {og_label} to {label}.", tag="blue", root=root)
         except Exception as e:
-            self.log(f"Email '{subject}' transfer failed: {str(e)}", tag="red", send_email=True, root=root)
+            self.log(f"Transfer failed for '{subject}': {str(e)}", tag="red", send_email=True, root=root)
 
 
     def get_subject(self, mail, label, root): # Get the message from the specified email
