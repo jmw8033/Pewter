@@ -171,6 +171,7 @@ class RectangulatorHandler:
 
                         # Get the company name from the invoice
                         identifier = self.sanitize_filename(self.get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path))
+                        print(f"Checking '{invoice_name[0]}' with template '{identifier}'")
 
                         # If company name on invoice matches name on template, use that template
                         if identifier.strip() and invoice_name[0] == identifier:
@@ -434,7 +435,7 @@ class RectangulatorHandler:
                 server.starttls()
                 server.login(sender_email, password)
                 server.sendmail(sender_email, config.RECIEVER_EMAIL, message.as_string())
-                self.log(f"Template request sent from {sender_email} to {config.RECIEVER_EMAIL}")
+                self.log(f"Template request sent from {sender_email} to {config.RECIEVER_EMAIL} - {root.current_date} {root.current_time}", root=root)
         except Exception as e:
                 self.log(f"Error sending email {body} - {str(e)}")
 
