@@ -30,7 +30,6 @@ you need a different invoice name format.
 * RECIEVER_EMAIL: Email address to receive error alerts.
 * TRUSTED_ADDRESS: Trusted email address for invoice senders.
 * ADDRESS: Email address domain (ex. @gmail.com).
-* PYTESSERACT_PATH: Path to pytesseract
 * CHROMEDRIVER_PATH: Path to chromedriver
 * INBOX_CYCLE_TIME = Cycle time for searching inbox (in seconds).
 * QUEUE_CYCLE_TIME = Cycle time for rectangulator checking the queue (in seconds).
