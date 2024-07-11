@@ -379,8 +379,9 @@ class EmailProcessor:
                 self.send_email(message)
             
             # Write to the log file
-            with open(self.LOG_FILE, "a") as file:
-                file.write(message + "\n")
+            if tag != "no_new_emails":
+                with open(self.LOG_FILE, "a") as file:
+                    file.write(message + "\n")
         except Exception as e:
             print(f"Error logging: {str(e)}")
 

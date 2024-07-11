@@ -93,11 +93,11 @@ class RectangulatorHandler:
 
                 # Check if Rectangulator fails
                 if return_list == [] or return_list[0] == None:
+                    self.set_dest_label("Errors")
+                    os.remove(filepath)
                     self.log(f"Rectangulator failed", tag="red", send_email=True, root=root)
                     subject = self.get_subject(mail, "Queued", root)
                     self.log(f"Failed to download '{filename}' from {subject}, moved to Error label, not printed", tag="red", send_email=True, root=root)
-                    self.set_dest_label("Errors")
-                    os.remove(filepath)
                     continue
                 
                 new_filepath, should_print = return_list
@@ -295,6 +295,7 @@ class RectangulatorHandler:
 
 
     def move_email(self, mail, label, og_label, root): # Moves email to label
+        subject = "Unknown"
         try:
             # Get msg and subject if possible
             root.imap.select(og_label)
@@ -313,6 +314,7 @@ class RectangulatorHandler:
 
     def get_subject(self, mail, label, root): # Get the message from the specified email
         try:
+            print(mail, label)
             root.imap.select(label)
             _, data = root.imap.fetch(mail, "(RFC822)")
             raw_email = data[0][1]
