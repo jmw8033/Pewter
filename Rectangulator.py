@@ -34,16 +34,15 @@ class RectangulatorHandler:
         self.root = None
         self.queue_loop = threading.Thread(target=self.process_queue)
         self.queue_loop.start()
-        self.current_email = None
-        self.current_email_dest = None
+        self.current_email_dest = "Invoices"
 
 
     def add_to_queue(self, mail, filename, filepath, root, template_folder, testing=False): # Add a file to the queue, or process it immediately if template exists
-        if mail == "End": # signal to end the current email and move to correct label
+        if testing == "End": # signal to end the current email and move to correct label
             self.queue.append([mail, filename, filepath, root, template_folder, testing])
             return
 
-        if testing and mail == None: # when specifically pressing the test rectangulator button
+        if testing == True and mail == None: # when specifically pressing the test rectangulator button
             self.rectangulate(filename, filepath, root, template_folder, testing)
             return   
         
@@ -57,8 +56,6 @@ class RectangulatorHandler:
         template_exists = self.check_templates(filepath, template_folder, root)
         if template_exists:
             new_filepath = template_exists[0]
-            self.current_email = mail
-            self.set_dest_label("Invoices")
             if os.path.exists(new_filepath): # check if file already exists
                 self.log(f"New invoice file already exists at {new_filepath}", tag="orange", root=root)
                 new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
@@ -79,12 +76,10 @@ class RectangulatorHandler:
                 if len(self.queue) == 0:
                     time.sleep(config.QUEUE_CYCLE_TIME)
                     continue
-                
                 mail, filename, filepath, root, template_folder, testing = self.queue.pop(0)
-                if mail == "End":
-                    self.move_email(self.current_email, self.current_email_dest, "Queued", root)
-                    self.current_email = None
-                    self.current_email_dest = None
+                if testing == "End":
+                    self.move_email(mail, self.current_email_dest, "Queued", root)
+                    self.current_email_dest = "Invoices"
                     continue
                 else:
                     self.current_email = mail
@@ -101,7 +96,7 @@ class RectangulatorHandler:
                     continue
                 
                 new_filepath, should_print = return_list
-                if testing:
+                if testing == True:
                     should_print = False
 
                 # Check if not invoice
@@ -121,9 +116,9 @@ class RectangulatorHandler:
                 
                 # Save invoice
                 os.rename(filepath, new_filepath)
-                self.set_dest_label("Invoices")
                 self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {root.current_date} {root.current_time}", tag="blue", root=root)
                 self.print_invoice(new_filepath, root)
+                time.sleep(1)
 
             except Exception as e:
                 self.log(f"An error occurred while processing the queue: {str(e)}", tag="red", send_email=True, root=root)
@@ -170,7 +165,7 @@ class RectangulatorHandler:
                             break
 
                         # Get the company name from the invoice
-                        identifier = self.sanitize_filename(self.get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path))
+                        identifier = self.get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path)
                         print(f"Checking '{invoice_name[0]}' with template '{identifier}'")
 
                         # If company name on invoice matches name on template, use that template
@@ -302,10 +297,10 @@ class RectangulatorHandler:
             subject = self.get_subject(mail, og_label, root)
 
             # Make a copy of the email in the specified label
-            copy = root.imap.copy(mail, label)
+            copy = root.imap.uid('COPY', mail, label)
 
             # Mark the original email as deleted
-            root.imap.store(mail, "+FLAGS", "\\Deleted")
+            self.root.imap.uid('STORE', mail, '+FLAGS', '(\Deleted)')
             root.imap.expunge()
             self.log(f"Moved email '{subject}' from {og_label} to {label}.", tag="blue", root=root)
         except Exception as e:
@@ -314,26 +309,14 @@ class RectangulatorHandler:
 
     def get_subject(self, mail, label, root): # Get the message from the specified email
         try:
-            print(mail, label)
             root.imap.select(label)
-            _, data = root.imap.fetch(mail, "(RFC822)")
+            _, data = root.imap.uid('FETCH', mail, '(RFC822)')
             raw_email = data[0][1]
             msg = email.message_from_bytes(raw_email)
             return msg["Subject"]
         except Exception as e:
             self.log(f"Error getting subject: {str(e)}", root=root, tag="red", send_email=True)
             return "Unknown"
-
-
-    def get_email(self, label, root): # Get the most recent email from the specified label
-        try:
-            root.imap.select(label)
-            _, data = root.imap.search(None, "ALL")
-            mail = data[0].split()[-1]
-            return mail
-        except Exception as e:
-            self.log(f"Error getting email from {label}: {str(e)}", tag="red", root=root)
-            return
 
 
     def sanitize_filename(self, filename): # Remove invalid characters from the filename
@@ -437,7 +420,7 @@ class RectangulatorHandler:
                 server.starttls()
                 server.login(sender_email, password)
                 server.sendmail(sender_email, config.RECIEVER_EMAIL, message.as_string())
-                self.log(f"Template request sent from {sender_email} to {config.RECIEVER_EMAIL} - {root.current_date} {root.current_time}", root=root)
+                self.log(f"Alert sent from {sender_email} to {config.RECIEVER_EMAIL} - {root.current_date} {root.current_time}", root=root)
         except Exception as e:
                 self.log(f"Error sending email {body} - {str(e)}")
 
@@ -481,7 +464,8 @@ class Rectangulator:
 
     def rename_pdf(self): # Rename the PDF based on extracted text from rectangles
         try:
-            if len(self.rectangles) == 3:
+            print(len(self.rectangles), self.rectangles)
+            if len(self.rectangles) == 3 and all(self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles):
                 self.save_template()
             
                 # Rename the PDF based on extracted text from rectangles in format "MM-DD-YY_INVOICE_NUMBER"

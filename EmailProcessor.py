@@ -180,7 +180,7 @@ class EmailProcessor:
                 if not self.pause_event.is_set() and self.connected:
                     # Search for all emails in the inbox
                     self.imap.select("inbox")
-                    _, emails = self.imap.search(None, "ALL")
+                    _, emails = self.imap.uid('search', None, "ALL")
 
                     # Check if no new mail
                     if not emails[0]:
@@ -274,12 +274,12 @@ class EmailProcessor:
                 else:
                     self.add_to_queue(mail, part)
         if subject != "Test":
-            self.add_to_queue("End", None)
+            self.add_to_queue(mail, None, testing="End")
 
 
     def add_to_queue(self, mail, part, testing=False): # Adds invoice to Rectangulator queue
-        if mail == "End": # tell rectangulator it's the end of the email (since there could be multiple attachments)
-            self.rectangulator_handler.add_to_queue("End", None, None, self, None, None)
+        if testing == "End": # tell rectangulator it's the end of the email (since there could be multiple attachments)
+            self.rectangulator_handler.add_to_queue(mail, None, None, self, None, testing)
             return
 
         # Get fllename and attachment
@@ -296,7 +296,7 @@ class EmailProcessor:
         with open(filepath, "wb") as file:
             file.write(attachment)
 
-        if testing: # when testing inbox
+        if testing == True: # when testing inbox
             filename = f"Test_{filename}"
             self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, self.TESTING)
             return
@@ -314,10 +314,10 @@ class EmailProcessor:
                 subject = msg["Subject"]
 
             # Make a copy of the email in the specified label
-            copy = self.imap.copy(mail, label)
+            copy = self.imap.uid('COPY', mail, label)
 
             # Mark the original email as deleted
-            self.imap.store(mail, "+FLAGS", "\\Deleted")
+            self.imap.uid('STORE', mail, '+FLAGS', '(\Deleted)')
             self.imap.expunge()
             self.log(f"Moved email '{subject}' from {og_label} to {label}.", tag="blue")
             return copy
@@ -347,12 +347,12 @@ class EmailProcessor:
                 self.log(f"Error sending email - {str(e)}", tag="red")
 
 
-    def get_email(self, label): # Gets most recent email in label
+    def get_email(self, label): # Gets most recent email uid in label
         try:
             self.imap.select(label)
-            _, data = self.imap.search(None, "ALL")
-            email_id = data[0].split()[-1]
-            return email_id
+            _, data = self.imap.uid('search', None, "ALL")
+            uid = data[0].split()[-1]
+            return uid
         except Exception as e:
             self.log(f"An error occurred while getting email: {str(e)}", tag="red", send_email=True)
             return None
@@ -406,7 +406,7 @@ class EmailProcessor:
     def get_msg(self, mail, label): # Gets email message
         try:
             self.imap.select(label)
-            _, data = self.imap.fetch(mail, "(RFC822)")
+            _, data = self.imap.uid('FETCH', mail, '(RFC822)')
             raw_email = data[0][1]
             msg = email.message_from_bytes(raw_email)
             return msg
