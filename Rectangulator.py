@@ -61,6 +61,7 @@ class RectangulatorHandler:
                 new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
             os.rename(filepath, new_filepath)
             self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {root.current_date} {root.current_time}", tag="blue", root=root)
+            print(testing)
             if not testing:
                 self.print_invoice(new_filepath, root)
             return
@@ -117,7 +118,8 @@ class RectangulatorHandler:
                 # Save invoice
                 os.rename(filepath, new_filepath)
                 self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {root.current_date} {root.current_time}", tag="blue", root=root)
-                self.print_invoice(new_filepath, root)
+                if not testing:
+                    self.print_invoice(new_filepath, root)
                 time.sleep(1)
 
             except Exception as e:
@@ -300,7 +302,7 @@ class RectangulatorHandler:
             copy = root.imap.uid('COPY', mail, label)
 
             # Mark the original email as deleted
-            self.root.imap.uid('STORE', mail, '+FLAGS', '(\Deleted)')
+            root.imap.uid('STORE', mail, '+FLAGS', '(\Deleted)')
             root.imap.expunge()
             self.log(f"Moved email '{subject}' from {og_label} to {label}.", tag="blue", root=root)
         except Exception as e:

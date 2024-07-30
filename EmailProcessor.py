@@ -298,7 +298,7 @@ class EmailProcessor:
 
         if testing == True: # when testing inbox
             filename = f"Test_{filename}"
-            self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, self.TESTING)
+            self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, True)
             return
 
         # Prompt user to make template, timeout if it takes too long
