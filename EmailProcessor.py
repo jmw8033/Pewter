@@ -396,10 +396,10 @@ class EmailProcessor:
                 email_ids = data[0].split()
 
                 # Alert user if there are emails
-                if len(email_ids) > 0:
-                    self.log(f"{len(email_ids)} emails in {label} - {self.current_time} {self.current_date}", tag="orange")
                 if len(labels) == 1:
                     return email_ids
+                elif len(email_ids) > 0:
+                    self.log(f"{len(email_ids)} emails in {label} - {self.current_time} {self.current_date}", tag="orange")
             except Exception as e:
                 self.log(f"An error occurred while checking the label: {str(e)}", tag="red", send_email=True)
         
