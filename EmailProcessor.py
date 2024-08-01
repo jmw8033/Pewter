@@ -387,11 +387,12 @@ class EmailProcessor:
 
 
     def check_labels(self, labels): # Checks for emails that need to be looked at in labels
+        # If passed one label, returns email uids, otherwise just logs the number of emails in each label
         for label in labels:
             try:
                 # Check if any emails in specified label
                 self.imap.select(label)
-                _, data = self.imap.search(None, "ALL")
+                _, data = self.imap.uid('search', None, "ALL")
                 email_ids = data[0].split()
 
                 # Alert user if there are emails
