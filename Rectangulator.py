@@ -61,9 +61,14 @@ class RectangulatorHandler:
                 new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
             os.rename(filepath, new_filepath)
             self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {root.current_date} {root.current_time}", tag="blue", root=root)
-            print(testing)
             if not testing:
                 self.print_invoice(new_filepath, root)
+            return
+
+        # If in away mode, just print and move to away label
+        if root.AWAY_MODE:
+            self.print_invoice(filepath, root)
+            self.set_dest_label("Away")
             return
 
         # Otherwise add to queue
@@ -91,7 +96,6 @@ class RectangulatorHandler:
                 if return_list == [] or return_list[0] == None:
                     self.set_dest_label("Errors")
                     os.remove(filepath)
-                    self.log(f"Rectangulator failed", tag="red", send_email=True, root=root)
                     subject = self.get_subject(mail, "Queued", root)
                     self.log(f"Failed to download '{filename}' from {subject}, moved to Error label, not printed", tag="red", send_email=True, root=root)
                     continue
@@ -276,7 +280,7 @@ class RectangulatorHandler:
 
 
     def set_dest_label(self, label): # Set the destination label for the current email
-        if self.current_email_dest not in {"Errors", "Need_Print", "Not_Invoice"}:
+        if self.current_email_dest not in {"Errors", "Need_Print", "Not_Invoice", "Away"}:
             self.current_email_dest = label
 
 

@@ -50,7 +50,8 @@ class EmailProcessor:
             self.pause_event = threading.Event() # used for cycles
             self.connected = False
             self.logging_out = False
-            self.TESTING = False # default to false
+            self.TESTING = False 
+            self.AWAY_MODE = False 
 
             # GUI BUTTONS
             self.button_frame = tk.Frame(self.root)
@@ -76,6 +77,9 @@ class EmailProcessor:
 
             self.testing_button = tk.Button(self.button_frame, text="Testing", command=self.toggle_testing, state=tk.NORMAL, bg="#FFCCCC", fg="black") # testing button
             self.testing_button.pack(side=tk.LEFT, padx=1)
+
+            self.away_mode_button = tk.Button(self.button_frame, text="Away Mode", command=self.toggle_away_mode, state=tk.NORMAL, bg="#FFCCCC", fg="black") # away mode button
+            self.away_mode_button.pack(side=tk.LEFT, padx=1)
 
             self.test_rectangulator_button = tk.Button(self.button_frame, text="Test Rectangulator", command=self.test_rectangulator, state=tk.NORMAL) # test rectangulator button
             self.test_rectangulator_button.pack(side=tk.LEFT, padx=1)
@@ -129,6 +133,7 @@ class EmailProcessor:
         self.errors_button.config(state=tk.NORMAL)
         self.print_errors_button.config(state=tk.NORMAL)
         self.testing_button.config(state=tk.DISABLED)
+        self.away_mode_button.config(state=tk.DISABLED)
         self.test_inbox_button.config(state=tk.NORMAL)
         
         # Imap login
@@ -203,6 +208,7 @@ class EmailProcessor:
                 self.logging_out = False
                 self.start_button.config(state=tk.NORMAL)
                 self.testing_button.config(state=tk.NORMAL)
+                self.away_mode_button.config(state=tk.NORMAL)
         except imaplib.IMAP4.abort as e:
             self.log(f"Socket error: {str(e)}", tag="red", send_email=False)
             self.imap = self.connect(log=False)
@@ -504,6 +510,15 @@ class EmailProcessor:
         else:
             self.TESTING = True
             self.testing_button.config(bg="#CCFFCC")
+
+
+    def toggle_away_mode(self): # Toggles away mode, always prints an saves invoice
+        if self.AWAY_MODE:
+            self.AWAY_MODE = False
+            self.away_mode_button.config(bg="#FFCCCC")
+        else:
+            self.AWAY_MODE = True
+            self.away_mode_button.config(bg="#CCFFCC")
 
 
     def test_rectangulator(self): # Opens rectangulator with test invoice
