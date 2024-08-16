@@ -121,7 +121,10 @@ class EmailProcessor:
             self.INVOICE_FOLDER = self.TEST_INVOICE_FOLDER
             self.log("Testing mode enabled", tag="orange")
 
-        self.log("\n\nConnecting...", tag="dgreen")
+        
+        with open(self.LOG_FILE, "a") as file:
+            file.write("\n\n")
+        self.log("Connecting...", tag="dgreen")
         self.root.update()
         self.processor_running = True
 
