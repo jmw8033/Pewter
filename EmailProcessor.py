@@ -121,7 +121,7 @@ class EmailProcessor:
             self.INVOICE_FOLDER = self.TEST_INVOICE_FOLDER
             self.log("Testing mode enabled", tag="orange")
 
-        self.log("Connecting...", tag="dgreen")
+        self.log("\n\nConnecting...", tag="dgreen")
         self.root.update()
         self.processor_running = True
 
@@ -189,7 +189,7 @@ class EmailProcessor:
 
                     # Check if no new mail
                     if not emails[0]:
-                        self.log(f"No new emails - {self.current_time} {self.current_date}", tag="no_new_emails")
+                        self.log(f"No new emails - {self.current_time} {self.current_date}", tag="no_new_emails", write=False)
                         self.check_labels(["Need_Print", "Need_Login", "Errors"])
                         self.pause_event.wait(timeout=self.CYCLE_TIME)  # pause until next cycle
                     else:
@@ -364,7 +364,7 @@ class EmailProcessor:
             return None
 
 
-    def log(self, *args, tag=None, send_email=False): # Logs to text box and log file
+    def log(self, *args, tag=None, send_email=False, write=True): # Logs to text box and log file
         try:
             if self.window_closed: # check if window is still open
                 return
@@ -385,7 +385,7 @@ class EmailProcessor:
                 self.send_email(message)
             
             # Write to the log file
-            if tag != "no_new_emails":
+            if write:
                 with open(self.LOG_FILE, "a") as file:
                     file.write(message + "\n")
         except Exception as e:
@@ -540,7 +540,7 @@ class EmailProcessor:
     def reconnect(self): # Reconnects to email
         self.disconnect(log=False)
         self.imap = self.connect(log=False)
-        self.log(f"Reconnected to {self.username} - {self.current_time} {self.current_date}", tag="green")
+        self.log(f"Reconnected to {self.username} - {self.current_time} {self.current_date}", tag="green", write=False)
 
 
     def on_program_exit(self): # Runs when program is closed, disconnects and closes window
