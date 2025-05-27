@@ -1,15 +1,19 @@
 import Rectangulator
-import Loginulator
 import threading
 import traceback
 import imaplib
 import smtplib
 import config
 import email
+import queue
 import time
 import os
 import tkinter as tk
 import win32gui
+import win32print
+import win32api
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -22,7 +26,7 @@ class EmailProcessor:
     INVOICE_FOLDER = config.INVOICE_FOLDER
     IMAP_SERVER = config.IMAP_SERVER
     SMTP_SERVER = config.SMTP_SERVER
-    RECIEVER_EMAIL = config.RECIEVER_EMAIL
+    RECEIVER_EMAIL = config.RECEIVER_EMAIL
     TRUSTED_ADDRESS = config.TRUSTED_ADDRESS
     ADDRESS = config.ADDRESS
     CYCLE_TIME = config.INBOX_CYCLE_TIME
@@ -31,19 +35,17 @@ class EmailProcessor:
     TEST_INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
     TEST_TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
 
-    def __init__(self, username, password, rectangulator_handler):
+    def __init__(self, username, password):
         try:
             # GUI
             self.root = tk.Tk()
             self.root.iconbitmap(self.ICON_PATH)
-            self.root.geometry("900x400")
+            self.root.geometry("1400x700")
             self.root.title(f"{username.upper()} Pewter")
 
             # VARIABLES
             self.username = username
             self.password = password
-            self.rectangulator_handler = rectangulator_handler
-            self.alert_window = None # used for pop ups
             self.window_closed = None
             self.processor_thread = None
             self.processor_running = False
@@ -52,10 +54,22 @@ class EmailProcessor:
             self.logging_out = False
             self.TESTING = False 
             self.AWAY_MODE = False 
+            self.current_emails = set() # set of emails that are currently being processed
+            self.current_emails_lock = threading.Lock() # lock for current_emails
+            self.remaining_pdfs = {} # set of pdfs that are still being processed per uid
+
+            # Layout frames (left for console, right for rectangulator)
+            self.alert_container = tk.Frame(self.root, relief="raised") # container for alert popups
+            self.alert_container.place(relx=0.5, rely=0.5, anchor=tk.CENTER) # center the alert container
+            self.alert_container.lower() # hide initially
+            self.right_frame = tk.Frame(self.root)
+            self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+            self.left_frame = tk.Frame(self.root)
+            self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
             # GUI BUTTONS
-            self.button_frame = tk.Frame(self.root)
-            self.button_frame.pack(side=tk.TOP)
+            self.button_frame = tk.Frame(self.left_frame) # frame for buttons
+            self.button_frame.pack(side=tk.TOP, fill=tk.X)
 
             self.start_button = tk.Button(self.button_frame, text="Start", command=self.main) # start process button
             self.start_button.pack(side=tk.LEFT, padx=1)
@@ -87,42 +101,54 @@ class EmailProcessor:
             self.test_inbox_button = tk.Button(self.button_frame, text="Test Inbox", command=self.test_inbox, state=tk.DISABLED) # test inbox button
             self.test_inbox_button.pack(side=tk.LEFT, padx=1)
 
-            scrollbar = tk.Scrollbar(self.root)
+            scrollbar = tk.Scrollbar(self.left_frame) # scrollbar for text box
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-            self.log_text_widget = tk.Text(self.root, yscrollcommand=scrollbar.set, height=30, width=140, spacing1=4, padx=0, pady=0) # text label
-            self.log_text_widget.pack(side=tk.LEFT, fill=tk.BOTH)
+            self.log_text_widget = tk.Text(self.left_frame, yscrollcommand=scrollbar.set, height=30, width=140, spacing1=4, padx=0, pady=0) # text label
+            self.log_text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             scrollbar.configure(command=self.log_text_widget.yview)
+
+            # Plot canvas for rectangulator
+            self.figure = Figure(figsize=(7, 6), dpi=100)
+            self.ax = self.figure.add_subplot(111)
+            self.ax.axis("off")
+            self.canvas = FigureCanvasTkAgg(self.figure, master=self.right_frame)
+            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            
+            self.gui_queue = queue.Queue() # queue for all gui tasks
+            self.gui_busy = False
+            self.rectangulator_handler = Rectangulator.RectangulatorHandler(self, self.figure, self.ax)
 
             # GUI STYLES
             self.log_text_widget.tag_configure("red", background="#FFCCCC")
             self.log_text_widget.tag_configure("yellow", background="yellow")
             self.log_text_widget.tag_configure("orange", background="#FFB434")	
-            self.log_text_widget.tag_configure("lgreen", background="#CCFFCC") # light green
-            self.log_text_widget.tag_configure("green", background="#39FF12") # green
-            self.log_text_widget.tag_configure("dgreen", background="#00994d") # dark green
+            self.log_text_widget.tag_configure("lgreen", background="#CCFFCC")
+            self.log_text_widget.tag_configure("green", background="#39FF12")
+            self.log_text_widget.tag_configure("dgreen", background="#00994d")
             self.log_text_widget.tag_configure("blue", background="#89CFF0")
             self.log_text_widget.tag_configure("purple", background="#E6E6FA")
             self.log_text_widget.tag_configure("gray", background="#DEDDDD")
-            self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD") # gray
+            self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD")
+            self.log_text_widget.tag_configure("label_error", background="#FFB434")
             self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8) # default
 
             self.root.protocol("WM_DELETE_WINDOW", self.on_program_exit) # runs exit protocol on window close
+            self.root.after(1000, self.process_queue) # starts queue processing
             self.root.mainloop()
         except Exception as e:
             print(f"An error occurred while initializing the EmailProcessor: {str(e)}")
-            time.sleep(5) # try again after 5 seconds
-            return self.__init__(username, password)
         
 
     def main(self): # Runs when start button is pressed 
-        if self.TESTING:
+        if self.TESTING: # set appropriate folders for testing
             self.TEMPLATE_FOLDER = self.TEST_TEMPLATE_FOLDER
             self.INVOICE_FOLDER = self.TEST_INVOICE_FOLDER
-            self.log("Testing mode enabled", tag="orange")
-
+            self.log("Testing mode enabled", tag="yellow")
+        else:
+            self.TEMPLATE_FOLDER = config.TEMPLATE_FOLDER
+            self.INVOICE_FOLDER = config.INVOICE_FOLDER
         
-        with open(self.LOG_FILE, "a") as file:
+        with open(self.LOG_FILE, "a") as file: # open log file
             file.write("\n\n")
         self.log("Connecting...", tag="dgreen")
         self.root.update()
@@ -139,7 +165,7 @@ class EmailProcessor:
         self.away_mode_button.config(state=tk.DISABLED)
         self.test_inbox_button.config(state=tk.NORMAL)
         
-        # Imap login
+        # Login primary connnection to gmail
         self.imap = self.connect()
         if self.imap:
             self.processor_thread = threading.Thread(target=self.search_inbox)
@@ -155,18 +181,12 @@ class EmailProcessor:
             if log:
                 self.log(f"--- Connected to {self.username} --- {self.current_time} {self.current_date}", tag="dgreen")
             return imap
-        except imaplib.IMAP4_SSL.error as e:
+        except imaplib.IMAP4.error as e:
             if log:
                 self.log(f"Unable to connect to {self.username}: {str(e)}", tag="red", send_email=True)
-            time.sleep(5)
-            return self.connect(self.username, self.password, log=False) # try again after 5 seconds
-        except RecursionError as e: 
-            self.log(f"An error occurred while connecting: {str(e)}", tag="red", send_email=True)
-            time.sleep(60) # wait a minutes
-            return self.connect(self.username, self.password, log=False)
         
 
-    def disconnect(self, log=True): # Disconnects email
+    def disconnect(self ,log=True): # Disconnects email
         try:
             self.imap.logout()
             self.connected = False
@@ -180,24 +200,40 @@ class EmailProcessor:
                 # If disconnecting isn't working, were probably already disconnected
                 self.log(f"Disconnecting isn't working: {str(e)}", tag="red")
 
+    ''' 
+    Search inbox loops through emails, creates thread for each email to process it by running process_email.
+    Process email calls handle_attachments which calls add_to_queue, which adds the pdf to the queue which is processed by process_queue on a separate thread.
+    The queue is processed by handle_rectangulator which runs the rectangulator and prints the invoice if needed.
+    '''
+    def search_inbox(self): # Main Loop, searches inbox for new emails, creates thread to handle each
 
-    def search_inbox(self): # Main Loop, searches inbox for new emails
         try:
-            cycle_count = 0
+            cycle_count = 0 # cycle count for reconnecting every hour
             while self.processor_running:
                 if not self.pause_event.is_set() and self.connected:
                     # Search for all emails in the inbox
-                    self.imap.select("inbox")
-                    _, emails = self.imap.uid('search', None, "ALL")
+                    self.imap.select("INBOX")
+                    _, emails = self.imap.uid('search', None, "UNSEEN")
+                    uids = [uid.decode() for uid in emails[0].split() if uid]  # Decode bytes to str and filter out empty uids
+                    new_uids = []
+
+                    # check if emails have already been processed
+                    with self.current_emails_lock: 
+                        for uid in uids:
+                            if uid not in self.current_emails:
+                                new_uids.append(uid)
+                                self.current_emails.add(uid)
+                                self.imap.uid('STORE', uid, '+FLAGS', '(\Seen)') # mark as seen
 
                     # Check if no new mail
-                    if not emails[0]:
+                    if not new_uids:
                         self.log(f"No new emails - {self.current_time} {self.current_date}", tag="no_new_emails", write=False)
-                        self.check_labels(["Need_Print", "Need_Login", "Errors"])
+                        self.check_labels(["Need_Print", "Need_Login", "Errors"], self.imap)
                         self.pause_event.wait(timeout=self.CYCLE_TIME)  # pause until next cycle
                     else:
-                        self.flash_taskbar()
-                        self.process_email(emails[0].split()[0])
+                        for uid in new_uids:
+                            threading.Thread(target=self.process_email, args=(uid,), daemon=True).start()
+                        self.root.after(0, self.flash_taskbar) # flash taskbar if new email
 
                     cycle_count += 1
                     # Reconnect every hour
@@ -214,64 +250,53 @@ class EmailProcessor:
                 self.away_mode_button.config(state=tk.NORMAL)
         except imaplib.IMAP4.abort as e:
             self.log(f"Socket error: {str(e)}", tag="red", send_email=False)
-            self.imap = self.connect(log=False)
             self.restart_processing()
         except Exception as e:  
             self.log(f"An error occurred while searching the inbox: {str(e)}", tag="red", send_email=True)
             self.restart_processing()
 
-
-    def process_email(self, mail): # Handles each email
+        
+    def process_email(self, mail): # Handles each email in own thread created by search_inbox
         subject = ""
+        imap = self.connect(log=False)
         try: 
             # Fetch email
-            msg = self.get_msg(mail, "inbox")
+            msg = self.get_msg(mail, "INBOX", imap)
+            if msg is None:
+                self.log(f"Email not found (process_email): {mail}", tag="red", send_email=True)
+                return
             subject = msg["Subject"]
             sender_email = email.utils.parseaddr(msg["From"])[1]
 
             # Check if sender is trusted
             if not sender_email.endswith(self.TRUSTED_ADDRESS):
-                self.move_email(mail, "Not_Invoices", "inbox")
+                self.move_email(mail, "Not_Invoices", "INBOX", imap)
                 return
             
             # Check for attachments
-            has_attachment = any(part.get("content-disposition", "").startswith("attachment") for part in msg.walk() if msg.is_multipart())
+            has_attachment = any(part.get_content_disposition() == "attachment" and part.get_filename().lower().endswith(".pdf") for part in msg.walk())
             if not has_attachment:
-                attachment_error = self.handle_login(mail)
+                pass
             else:
-                self.move_email(mail, "Queued", "inbox")
-                self.handle_attachments(self.get_email("Queued"))
-
+                with self.current_emails_lock:
+                    self.current_emails.add(mail)
+                self.handle_attachments(mail, imap)
         except Exception as e:
             self.log(f"An error occurred while processing an email: {str(e)} \n {traceback.format_exc()}", tag="red", send_email=True)
-            self.move_email(mail, "Errors", "inbox")
+            self.move_email(mail, "Errors", "INBOX", imap)
             return
-        
-
-    def handle_login(self, mail): # Handles login emails, not implemented
-        msg = self.get_msg(mail)
-        subject = msg["Subject"]
-        filepaths = Loginulator.get_filepaths(msg)
-        if not filepaths:
-            self.log(f"Loginulator failed for '{subject}'", tag="red", send_email=True)
-            self.move_email(mail, "Need_Login")
-            return True
-        
-        for filepath in filepaths:
-            new_filepath = Rectangulator.main(filepath, self, self.TEMPLATE_FOLDER)
+        finally:
             try:
-                # Save invoice
-                os.rename(filepath, new_filepath)
-                self.log(f"Created new invoice file {os.path.basename(new_filepath)}", tag="blue")
-                self.print_invoice(new_filepath, mail)
-                return False
-            except Exception as e:
-                self.log(f"An error occurred while renaming {filepath} to {new_filepath}: {str(e)}", tag="red", send_email=True)
-                return True
+                imap.logout()
+            except:
+                pass
+       
 
-
-    def handle_attachments(self, mail): # Iterate over email parts and find pdf
-        msg = self.get_msg(mail, "Queued")
+    def handle_attachments(self, mail, imap): # Iterate over email parts and find pdf, ran by process_email
+        msg = self.get_msg(mail, "INBOX", imap)
+        if msg is None:
+            self.log(f"Email not found (handle_attachments): {mail}", tag="red", send_email=True)
+            return
         subject = msg["Subject"]
         filenames = []
 
@@ -279,57 +304,129 @@ class EmailProcessor:
             if part.get_filename() not in filenames and part.get_content_disposition() is not None and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf"):
                 filenames.append(part.get_filename())
                 if subject == "Test":
-                    self.add_to_queue(mail, part, testing=True)
+                    self.add_to_queue(mail, part, imap, testing="test")
+                elif self.TESTING:
+                    self.add_to_queue(mail, part, imap, testing=True)
                 else:
-                    self.add_to_queue(mail, part)
-        if subject != "Test":
-            self.add_to_queue(mail, None, testing="End")
+                    self.add_to_queue(mail, part, imap)
+        self.remaining_pdfs[mail] = len(filenames)
+        self.log(f"Processing {len(filenames)} pdfs for email '{subject}'", tag="blue")
 
 
-    def add_to_queue(self, mail, part, testing=False): # Adds invoice to Rectangulator queue
-        if testing == "End": # tell rectangulator it's the end of the email (since there could be multiple attachments)
-            self.rectangulator_handler.add_to_queue(mail, None, None, self, None, testing)
-            return
-
-        # Get fllename and attachment
-        filename = part.get_filename()
-        filepath = os.path.join(self.INVOICE_FOLDER, filename)
-        attachment = part.get_payload(decode=True)
-        
-        # Check if file already exists
-        if os.path.exists(filepath):
-            filename = f"{filename[:-4]}_{str(int(time.time()))}.pdf"
+    def add_to_queue(self, mail, part, imap, testing=False): # Adds invoices to queue, ran by handle_attachments
+        try:
+            # Get fllename and attachment
+            filename = part.get_filename()
+            if testing == "test": # when testing inbox
+                filename = f"Test_{filename}"
             filepath = os.path.join(self.INVOICE_FOLDER, filename)
-        
-        # Download invoice PDF
-        with open(filepath, "wb") as file:
-            file.write(attachment)
+            attachment = part.get_payload(decode=True)
 
-        if testing == True: # when testing inbox
-            filename = f"Test_{filename}"
-            self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, True)
-            return
+            # Check if file already exists
+            if os.path.exists(filepath):
+                filename = f"{filename[:-4]}_{str(int(time.time()))}.pdf"
+                filepath = os.path.join(self.INVOICE_FOLDER, filename)
+            
+            # Download invoice PDF
+            with open(filepath, "wb") as file:
+                file.write(attachment)
+            
+            self.gui_queue.put(("rectangulate", mail, filename, filepath, testing)) # add to queue for rectangulator
+        except Exception as e:
+            self.log(f"An error occurred while processing the queue: {str(e)}", tag="red", send_email=True)
 
-        # Prompt user to make template, timeout if it takes too long
-        self.rectangulator_handler.add_to_queue(mail, filename, filepath, self, self.TEMPLATE_FOLDER, self.TESTING)
+
+    def process_queue(self): # Processes queue of emails
+        try:
+            # Check if any gui tasks are in the queue
+            if not self.gui_queue.empty() and not self.gui_busy:
+                task = self.gui_queue.get_nowait()
+                if task[0] == "rectangulate":
+                    self.gui_busy = True
+                    # Unpack the task
+                    mail, filename, filepath, testing = task[1:6]
+                    self.root.after(0, lambda : self.handle_rectangulator(mail, filename, filepath, testing)) # run rectangulator in the main thread
+        finally:
+            self.root.after(1000, self.process_queue)  # Schedule the next check of the queue
+
+    
+    def handle_rectangulator(self, mail, filename, filepath, testing): # Handles rectangulator
+        try:
+            return_list = self.rectangulator_handler.rectangulate(filename, filepath, self, self.TEMPLATE_FOLDER, testing)
+                
+            # Check if Rectangulator fails
+            if return_list == [] or return_list[0] == None:
+                self.move_email(mail, "Errors", "INBOX", self.imap)
+                os.remove(filepath)
+                self.log(f"Failed to download '{filename}', moved to Error label, not printed", tag="red", send_email=True)
+                return
+            
+            if return_list[0] == "test_email": # test invoice
+                self.move_email(mail, "Test_Email", "INBOX", self.imap)
+                os.remove(filepath)
+                return
+
+            if mail in self.remaining_pdfs:
+                self.remaining_pdfs[mail] -= 1
+                if self.remaining_pdfs[mail] == 0:
+                    del self.remaining_pdfs[mail]
+                    self.move_email(mail, "Invoices", "INBOX", self.imap)
+
+            new_filepath, should_print = return_list
+            # Check if template used
+            if should_print == "template":
+                if not testing:
+                    self.print_invoice(new_filepath)
+                return
+            
+            if testing == True:
+                should_print = False
+
+            # Check if not invoice
+            if new_filepath == "not_invoice":
+                self.log(f"Marked not an invoice for '{filename}'", tag="lgreen")
+                if should_print:
+                    self.print_invoice(filepath)
+                os.remove(filepath)
+                return
+                
+            # Check if invoice has already been processed
+            if os.path.exists(new_filepath):
+                old_filepath = new_filepath
+                self.log(f"New invoice file already exists at {os.path.basename(old_filepath)}", tag="orange")
+                new_filepath = f"{old_filepath[:-4]}_{str(int(time.time()))}.pdf"
+            
+            # Save invoice
+            os.rename(filepath, new_filepath)
+            self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {self.current_date} {self.current_time}", tag="lgreen")
+            if should_print:
+                self.print_invoice(new_filepath)
+            time.sleep(1)
+        finally:
+            self.gui_busy = False
 
 
-    def move_email(self, mail, label, og_label): # Moves email to label
+    def move_email(self, mail, label, og_label, imap): # Moves email to label
         subject = "Unknown"
         try:
             # Get msg and subject if possible
-            msg = self.get_msg(mail, og_label)
+            msg = self.get_msg(mail, og_label, imap)
             if msg:
                 subject = msg["Subject"]
-
+            
             # Make a copy of the email in the specified label
-            copy = self.imap.uid('COPY', mail, label)
+            imap.select(og_label)
+            success = imap.uid('COPY', mail, label)
+            if success[0] != 'OK':
+                self.log(f"Error copying email '{subject}': {success[1]}", tag="red", send_email=True)
+                return False
+            # Mark as unseen
+            imap.uid('STORE', mail, '-FLAGS', '(\Seen)')
 
             # Mark the original email as deleted
-            self.imap.uid('STORE', mail, '+FLAGS', '(\Deleted)')
-            self.imap.expunge()
+            imap.uid('STORE', mail, '+FLAGS', '(\Deleted)')
+            imap.expunge()
             self.log(f"Moved email '{subject}' from {og_label} to {label}.", tag="blue")
-            return copy
         except Exception as e:
             self.log(f"Transfer failed for '{subject}': {str(e)}", tag="red", send_email=True)
 
@@ -344,27 +441,53 @@ class EmailProcessor:
             message = MIMEMultipart()
             message["Subject"] = "Alert"
             message["From"] = sender_email
-            message["To"] = self.RECIEVER_EMAIL
+            message["To"] = self.RECEIVER_EMAIL
             message.attach(MIMEText(body, "plain"))
 
             # Send the email using SMTP
             with smtplib.SMTP(self.SMTP_SERVER, 587) as server:
                 server.starttls()
                 server.login(sender_email, self.password)
-                server.sendmail(sender_email, self.RECIEVER_EMAIL, message.as_string())
+                server.sendmail(sender_email, self.RECEIVER_EMAIL, message.as_string())
         except Exception as e:
                 self.log(f"Error sending email - {str(e)}", tag="red")
 
 
-    def get_email(self, label): # Gets most recent email uid in label
+    def get_subject(self, mail, label, imap): # Get the message from the specified email
         try:
-            self.imap.select(label)
-            _, data = self.imap.uid('search', None, "ALL")
+            imap.select(label)
+            result, data = imap.uid('FETCH', mail, '(RFC822)')
+            if result != 'OK' or not data or not data[0]:
+                self.log(f"Error fetching email: {mail}", tag="red", send_email=True)
+                return None
+            raw_email = data[0][1]
+            msg = email.message_from_bytes(raw_email)
+            return msg["Subject"]
+        except Exception as e:
+            self.log(f"Error getting subject: {str(e)}", tag="red", send_email=True)
+            return "Unknown"
+
+
+    def get_email(self, label, imap): # Gets most recent email uid in label
+        try:
+            imap.select(label)
+            _, data = imap.uid('search', None, "ALL")
             uid = data[0].split()[-1]
             return uid
         except Exception as e:
-            self.log(f"An error occurred while getting email: {str(e)}", tag="red", send_email=True)
             return None
+
+
+    def print_invoice(self, filepath): # Printer
+        try:
+            # Get default printer and print
+            p = win32print.GetDefaultPrinter()
+            win32api.ShellExecute(0, "print", filepath, None,  ".",  0)
+            self.log(f"Printed {os.path.basename(filepath)}.", tag="lgreen")
+            return True
+        except Exception as e:
+            self.log(f"Printing failed for {filepath}: {str(e)}", tag="red", send_email=True)
+            return False
 
 
     def log(self, *args, tag=None, send_email=False, write=True): # Logs to text box and log file
@@ -373,9 +496,10 @@ class EmailProcessor:
                 return
             message = " ".join([str(arg) for arg in args]) # convert args to string
 
-            # Get rid of no_new_emails messages
-            if tag == "no_new_emails":
+            # Get rid of no_new_emails and label_error messages
+            if tag == "no_new_emails" or tag == "label_error":
                 self.remove_messages(message)
+
             
             # Insert the new message to the text widget
             self.log_text_widget.insert(tk.END, message + "\n", (tag, "default"))
@@ -395,28 +519,31 @@ class EmailProcessor:
             print(f"Error logging: {str(e)}")
 
 
-    def check_labels(self, labels): # Checks for emails that need to be looked at in labels
+    def check_labels(self, labels, imap): # Checks for emails that need to be looked at in labels
         # If passed one label, returns email uids, otherwise just logs the number of emails in each label
         for label in labels:
             try:
                 # Check if any emails in specified label
-                self.imap.select(label)
-                _, data = self.imap.uid('search', None, "ALL")
+                imap.select(label)
+                _, data = imap.uid('search', None, "ALL")
                 email_ids = data[0].split()
 
                 # Alert user if there are emails
                 if len(labels) == 1:
                     return email_ids
                 elif len(email_ids) > 0:
-                    self.log(f"{len(email_ids)} emails in {label} - {self.current_time} {self.current_date}", tag="orange")
+                    self.log(f"{len(email_ids)} emails in {label} - {self.current_time} {self.current_date}", tag="label_error", write=False)
             except Exception as e:
                 self.log(f"An error occurred while checking the label: {str(e)}", tag="red", send_email=True)
         
     
-    def get_msg(self, mail, label): # Gets email message
+    def get_msg(self, mail, label, imap): # Gets email message
         try:
-            self.imap.select(label)
-            _, data = self.imap.uid('FETCH', mail, '(RFC822)')
+            imap.select(label)
+            result, data = imap.uid('FETCH', mail, '(RFC822)')
+            if result != 'OK' or not data or not data[0]:
+                self.log(f"Error fetching email: {mail}", tag="red", send_email=True)
+                return None
             raw_email = data[0][1]
             msg = email.message_from_bytes(raw_email)
             return msg
@@ -438,34 +565,34 @@ class EmailProcessor:
 
     def resolve_errors(self): # Moves error emails back to inbox
         try:
-            self.log(f"Attempting to resolve errors.", tag="blue")
+            self.log(f"Attempting to resolve errors.", tag="yellow")
             # Get emails in error label
-            email_ids = self.check_labels(["Errors"])
+            email_ids = self.check_labels(["Errors"], self.imap)
 
             if len(email_ids) == 0:
-                self.log(f"No errors to resolve.", tag="blue")
+                self.log(f"No errors to resolve.", tag="yellow")
                 return
 
             # Move emails back to inbox
             for email_id in email_ids:
-                self.move_email(email_id, "inbox", "Errors")
+                self.move_email(email_id, "INBOX", "Errors", self.imap)
         except Exception as e:
             self.log(f"Error resolving errors: {str(e)}", tag="red", send_email=True)
 
 
     def resolve_prints(self): # Moves unprinted invoices back to inbox
         try:
-            self.log(f"Attempting to resolve unprinted invoices.", tag="blue")
+            self.log(f"Attempting to resolve unprinted invoices.", tag="yellow")
             # Get emails in Need_Print label
-            email_ids = self.check_labels(["Need_Print"])
+            email_ids = self.check_labels(["Need_Print"], self.imap)
 
             if len(email_ids) == 0:
-                self.log(f"No unprinted invoices to resolve.", tag="blue")
+                self.log(f"No unprinted invoices to resolve.", tag="yellow")
                 return
 
             # Move emails back to inbox
             for email_id in email_ids:
-                self.move_email(email_id, "inbox", "Need_Print")
+                self.move_email(email_id, "INBOX", "Need_Print", self.imap)
         except Exception as e:
             self.log(f"Error resolving unprinted invoices: {str(e)}", tag="red", send_email=True)
 
@@ -489,14 +616,14 @@ class EmailProcessor:
 
  
     def restart_processing(self): # Restarts processing
-        self.log(f"Restarting...", tag="orange")
+        self.log(f"Restarting...", tag="yellow")
         self.disconnect()
         self.processor_thread = None
         self.main()
 
    
     def logout(self): # Logs out
-        self.log("Logging out...", tag="orange")
+        self.log("Logging out...", tag="yellow")
         self.pause_button.config(state=tk.DISABLED)
         self.errors_button.config(state=tk.DISABLED)
         self.logout_button.config(state=tk.DISABLED)
@@ -504,6 +631,7 @@ class EmailProcessor:
         self.pause_event.set()
         self.processor_running = False
         self.logging_out = True
+        self.current_emails.clear() # clear current emails
 
    
     def toggle_testing(self): # Toggles testing mode
@@ -525,19 +653,22 @@ class EmailProcessor:
 
 
     def test_rectangulator(self): # Opens rectangulator with test invoice
-        self.log("Testing Rectangulator...", tag="orange")
+        self.log("Testing Rectangulator...", tag="yellow")
         return_list = []
-        self.rectangulator_handler.add_to_queue(None, None, self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, True)
+        return_list = self.rectangulator_handler.rectangulate(None, self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, True)
         if return_list != []:
             new_filepath, should_print = return_list
-            self.log(f"new_filepath: {new_filepath}, should_print: {should_print}", tag="orange")
-        self.log("Testing complete.", tag="orange")
+            self.log(f"new_filepath: {new_filepath}, should_print: {should_print}", tag="purple")
+        self.log("Testing complete.", tag="yellow")
 
 
     def test_inbox(self): # Sends test email to inbox, won't be printed or downloaded
-        self.log("Sending test email to inbox", tag="orange")
-        mail = self.get_email("Test_Email")
-        self.move_email(mail, "inbox", "Test_Email")
+        self.log("Sending test email to inbox", tag="yellow")
+        mail = self.get_email("Test_Email", self.imap)
+        if mail is None:
+            self.log("Test email missing", tag="orange")
+            return
+        self.move_email(mail, "INBOX", "Test_Email", self.imap)
 
 
     def reconnect(self): # Reconnects to email

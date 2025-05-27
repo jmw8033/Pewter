@@ -1,6 +1,6 @@
 /desktop.ini
-/Log.txt
-/Log2.txt
+/Log*.txt
+/Loginulator.py
 /Drivers
 /__pycache__
 /Invoices

@@ -1,16 +1,11 @@
 import tkinter as tk
 
-class AlertWindow(tk.Toplevel):
+class AlertWindow(tk.Frame):
 
-    def __init__(self, message, numbered_buttons=0):
-        super().__init__()
-        self.title("Alert")
-        self.geometry("600x300")
+    def __init__(self, parent, message, numbered_buttons=0):
+        super().__init__(parent, relief="raised")
         self.choice = None
         self.numbered_buttons = numbered_buttons
-
-        # Ensure the window is always on top
-        self.attributes("-topmost", True)
 
         label = tk.Label(self, text=message, wraplength=1000, font=("Courier", 11), justify=tk.LEFT)
         label.pack(padx=20, pady=20)
@@ -38,5 +33,5 @@ class AlertWindow(tk.Toplevel):
         self.destroy()
 
     def get_answer(self):
-        self.wait_window()
+        self.wait_window(self)
         return self.choice
