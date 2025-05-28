@@ -36,6 +36,7 @@ class RectangulatorHandler:
         self.fig = fig
         self.ax = ax
         self.done_var = tk.IntVar()
+        self.LOG_FILE = config.LOG_FILE
 
     def rectangulate(self, filename, filepath, root, template_folder, testing=False ):  # Add a file to the queue, or process it immediately if template exists
         # Check if template exists and use it
@@ -150,11 +151,15 @@ class RectangulatorHandler:
         not_inv_button = Button(not_inv_button_ax, "Not An Invoice")
 
         def not_invoice(event):  # If the user clicks the "Not Invoice" button
-            self.invoice = False
-            self.ax.clear()
-            self.ax.axis("off")
-            self.fig.canvas.draw_idle()
-            self.done_var.set(1)
+            try:
+                self.invoice = False
+                self.ax.clear()
+                self.ax.axis("off")
+                self.fig.canvas.draw_idle()
+                self.done_var.set(1)
+            except Exception as e:
+                self.log(f"Error in not_invoice: {str(e)} \n{traceback.format_exc()}")
+                self.done_var.set(1) 
 
         not_inv_button.on_clicked(not_invoice)
 
@@ -285,27 +290,8 @@ class RectangulatorHandler:
         if send_email:
             self.send_email(message, self.root)
 
-    def move_email(self, mail, label, og_label, root):  # Moves email to label
-        subject = "Unknown"
-        try:
-            # Get msg and subject if possible
-            root.imap.select(og_label)
-            subject = self.get_subject(mail, og_label, root)
-
-            # Make a copy of the email in the specified label
-            copy = root.imap.uid('COPY', mail, label)
-
-            # Mark the original email as deleted
-            root.imap.uid('STORE', mail, '+FLAGS', '(\Deleted)')
-            root.imap.expunge()
-            self.log(f"Moved email '{subject}' from {og_label} to {label}.",
-                     tag="blue",
-                     display=True)
-        except Exception as e:
-            self.log(f"Transfer failed for '{subject}': {str(e)}",
-                     tag="red",
-                     send_email=True,
-                     display=True)
+        with open(self.LOG_FILE, "a") as file:
+            file.write(message + "\n")
 
     def sanitize_filename(self, filename):  # Remove invalid characters from the filename
         sanitized_filename = re.sub(r"[^\w_. -]", "",
@@ -439,17 +425,20 @@ class RectangulatorHandler:
             self.log(f"Error sending email {body} - {str(e)}")
 
     def create_alert(self, message, numbered_buttons=0):  # Create an alert window for user input
-        parent = self.root.alert_container
-        panel = AlertWindow(parent, message, numbered_buttons)
-        panel.pack(fill=tk.BOTH, expand=True)
-        parent.lift()
-        panel.grab_set()
-        panel.focus_set()
-        answer = panel.get_answer()  # wait for user input
-        panel.destroy()  # destroy the alert window
-        parent.lower()  # lower the alert container
-        return answer
-
+        try:
+            parent = self.root.alert_container
+            panel = AlertWindow(parent, message, numbered_buttons)
+            panel.pack(fill=tk.BOTH, expand=True)
+            parent.lift()
+            panel.grab_set()
+            panel.focus_set()
+            answer = panel.get_answer()  # wait for user input
+            panel.destroy()  # destroy the alert window
+            parent.lower()  # lower the alert container
+            return answer
+        except Exception as e:
+            self.log(f"Error creating alert: {str(e)} \n{traceback.format_exc()}")
+            return False
 
 class Rectangulator:
 

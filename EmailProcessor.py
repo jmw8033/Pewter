@@ -278,9 +278,21 @@ class EmailProcessor:
 
         # Login primary connnection to gmail
         self.imap = self.connect()
+        self.imap_lock = threading.RLock()  # lock for imap connection
         if self.imap:
             self.processor_thread = threading.Thread(target=self.search_inbox)
             self.processor_thread.start()
+
+    def safe_imap(self, func, *args, **kwargs):
+        """Safely calls an imap function with error handling."""
+        try:
+            with self.imap_lock:  # ensure thread-safe access to imap
+                return func(*args, **kwargs)
+        except imaplib.IMAP4.abort as e:
+            self.log(f"Socket error: {str(e)}", tag="red", send_email=False)
+            self.restart_processing()
+        except Exception as e:
+            self.log(f"An error occurred: {str(e)}", tag="red", send_email=True)
 
     def connect(self, log=True):  # Connects email, returns imap object
         user = f"{self.username}{self.ADDRESS}"
@@ -302,7 +314,7 @@ class EmailProcessor:
 
     def disconnect(self, log=True):  # Disconnects email
         try:
-            self.imap.logout()
+            self.safe_imap(self.imap.logout)  # safely logout
             self.connected = False
             if log:
                 self.log(
@@ -331,8 +343,8 @@ class EmailProcessor:
             while self.processor_running:
                 if not self.pause_event.is_set() and self.connected:
                     # Search for all emails in the inbox
-                    self.imap.select("INBOX")
-                    _, emails = self.imap.uid("search", None, "UNSEEN")
+                    self.safe_imap(self.imap.select, "INBOX")  # select inbox
+                    _, emails = self.safe_imap(self.imap.uid, "search", None, "UNSEEN")
                     uids = [uid.decode() for uid in emails[0].split() if uid]  # Decode bytes to str and filter out empty uids
                     new_uids = []
 
@@ -342,7 +354,7 @@ class EmailProcessor:
                             if uid not in self.current_emails:
                                 new_uids.append(uid)
                                 self.current_emails.add(uid)
-                                self.imap.uid("STORE", uid, "+FLAGS", "(\Seen)")  # mark as seen
+                                self.safe_imap(self.imap.uid, "STORE", uid, "-FLAGS", "(\Seen)")  # mark as unseen
 
                     # Check if no new mail
                     if not new_uids:
@@ -377,7 +389,7 @@ class EmailProcessor:
             self.restart_processing()
         except Exception as e:
             self.log(
-                f"An error occurred while searching the inbox: {str(e)}",
+                f"An error occurred while searching the inbox: {str(e)} \n{traceback.format_exc()}",
                 tag="red",
                 send_email=True,)
             self.restart_processing()
@@ -415,7 +427,7 @@ class EmailProcessor:
                 self.handle_attachments(mail, imap)
         except Exception as e:
             self.log(
-                f"An error occurred while processing an email: {str(e)} \n {traceback.format_exc()}",
+                f"An error occurred while processing an email: {str(e)} \n{traceback.format_exc()}",
                 tag="red",
                 send_email=True)
             self.move_email(mail, "Errors", "INBOX", imap)
@@ -555,37 +567,37 @@ class EmailProcessor:
                 tag="lgreen")
             if should_print:
                 self.print_invoice(new_filepath)
-            time.sleep(1)
         finally:
             self.gui_busy = False
 
     def move_email(self, mail, label, og_label, imap):  # Moves email to label
         subject = "Unknown"
         try:
-            # Get msg and subject if possible
-            msg = self.get_msg(mail, og_label, imap)
-            if msg:
-                subject = msg["Subject"]
+            with self.imap_lock:
+                # Get msg and subject if possible
+                msg = self.get_msg(mail, og_label, imap)
+                if msg:
+                    subject = msg["Subject"]
 
-            # Make a copy of the email in the specified label
-            imap.select(og_label)
-            success = imap.uid("COPY", mail, label)
-            if success[0] != "OK":
-                self.log(
-                    f"Error copying email '{subject}': {success[1]}",
-                    tag="red",
-                    send_email=True)
-                return False
-            # Mark as unseen
-            imap.uid("STORE", mail, "-FLAGS", "(\Seen)")
+                # Make a copy of the email in the specified label
+                imap.select(og_label)
+                success = imap.uid("COPY", mail, label)
+                if success[0] != "OK":
+                    self.log(
+                        f"Error copying email '{subject}': {success[1]}",
+                        tag="red",
+                        send_email=True)
+                    return False
+                # Mark as unseen
+                imap.uid("STORE", mail, "-FLAGS", "(\Seen)")
 
-            # Mark the original email as deleted
-            imap.uid("STORE", mail, "+FLAGS", "(\Deleted)")
-            imap.expunge()
-            self.log(f"Moved email '{subject}' from {og_label} to {label}.",
-                     tag="blue")
+                # Mark the original email as deleted
+                imap.uid("STORE", mail, "+FLAGS", "(\Deleted)")
+                imap.expunge()
+                self.log(f"Moved email '{subject}' from {og_label} to {label}.",
+                        tag="blue")
         except Exception as e:
-            self.log(f"Transfer failed for '{subject}': {str(e)}",
+            self.log(f"Transfer failed for '{subject}': {str(e)} \n{traceback.format_exc()}",
                      tag="red",
                      send_email=True)
 
@@ -613,16 +625,17 @@ class EmailProcessor:
 
     def get_subject(self, mail, label, imap):  # Get the message from the specified email
         try:
-            imap.select(label)
-            result, data = imap.uid("FETCH", mail, "(RFC822)")
-            if result != "OK" or not data or not data[0]:
-                self.log(f"Error fetching email: {mail}",
-                         tag="red",
-                         send_email=True)
-                return None
-            raw_email = data[0][1]
-            msg = email.message_from_bytes(raw_email)
-            return msg["Subject"]
+            with self.imap_lock:
+                imap.select(label)
+                result, data = imap.uid("FETCH", mail, "(RFC822)")
+                if result != "OK" or not data or not data[0]:
+                    self.log(f"Error fetching email: {mail}",
+                            tag="red",
+                            send_email=True)
+                    return None
+                raw_email = data[0][1]
+                msg = email.message_from_bytes(raw_email)
+                return msg["Subject"]
         except Exception as e:
             self.log(f"Error getting subject: {str(e)}",
                      tag="red",
@@ -631,10 +644,11 @@ class EmailProcessor:
 
     def get_email(self, label, imap):  # Gets most recent email uid in label
         try:
-            imap.select(label)
-            _, data = imap.uid("search", None, "ALL")
-            uid = data[0].split()[-1]
-            return uid
+            with self.imap_lock:
+                imap.select(label)
+                _, data = imap.uid("search", None, "ALL")
+                uid = data[0].split()[-1]
+                return uid
         except Exception as e:
             return None
 
@@ -684,19 +698,20 @@ class EmailProcessor:
         # If passed one label, returns email uids, otherwise just logs the number of emails in each label
         for label in labels:
             try:
-                # Check if any emails in specified label
-                imap.select(label)
-                _, data = imap.uid("search", None, "ALL")
-                email_ids = data[0].split()
+                with self.imap_lock:
+                    # Check if any emails in specified label
+                    imap.select(label)
+                    _, data = imap.uid("search", None, "ALL")
+                    email_ids = data[0].split()
 
-                # Alert user if there are emails
-                if len(labels) == 1:
-                    return email_ids
-                elif len(email_ids) > 0:
-                    self.log(
-                        f"{len(email_ids)} emails in {label} - {self.current_time} {self.current_date}",
-                        tag="label_error",
-                        write=False)
+                    # Alert user if there are emails
+                    if len(labels) == 1:
+                        return email_ids
+                    elif len(email_ids) > 0:
+                        self.log(
+                            f"{len(email_ids)} emails in {label} - {self.current_time} {self.current_date}",
+                            tag="label_error",
+                            write=False)
             except Exception as e:
                 self.log(
                     f"An error occurred while checking the label: {str(e)}",
@@ -705,16 +720,17 @@ class EmailProcessor:
 
     def get_msg(self, mail, label, imap):  # Gets email message
         try:
-            imap.select(label)
-            result, data = imap.uid("FETCH", mail, "(RFC822)")
-            if result != "OK" or not data or not data[0]:
-                self.log(f"Error fetching email: {mail}",
-                         tag="red",
-                         send_email=True)
-                return None
-            raw_email = data[0][1]
-            msg = email.message_from_bytes(raw_email)
-            return msg
+            with self.imap_lock:
+                imap.select(label)
+                result, data = imap.uid("FETCH", mail, "(RFC822)")
+                if result != "OK" or not data or not data[0]:
+                    self.log(f"Error fetching email: {mail}",
+                            tag="red",
+                            send_email=True)
+                    return None
+                raw_email = data[0][1]
+                msg = email.message_from_bytes(raw_email)
+                return msg
         except Exception as e:
             self.log(f"Error getting message: {str(e)}",
                      tag="red",
