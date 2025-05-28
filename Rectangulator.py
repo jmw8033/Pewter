@@ -7,7 +7,6 @@ from email.mime.text import MIMEText
 from Alertinator import AlertWindow
 from datetime import datetime
 import tkinter as tk
-import matplotlib.pyplot as plt
 import numpy as np
 import win32print
 import win32api
@@ -16,8 +15,6 @@ import threading
 import warnings
 import smtplib
 import config
-import queue
-import email
 import time
 import fitz
 import glob
@@ -25,6 +22,8 @@ import re
 import os
 
 warnings.simplefilter("ignore", UserWarning)
+
+
 class RectangulatorHandler:
 
     def __init__(self, root, fig, ax):
@@ -38,17 +37,21 @@ class RectangulatorHandler:
         self.ax = ax
         self.done_var = tk.IntVar()
 
-
-    def rectangulate(self, filename, filepath, root, template_folder, testing=False): # Add a file to the queue, or process it immediately if template exists
+    def rectangulate(self, filename, filepath, root, template_folder, testing=False ):  # Add a file to the queue, or process it immediately if template exists
         # Check if template exists and use it
         template_exists = self.check_templates(filepath, template_folder, root)
         if template_exists:
             new_filepath = template_exists[0]
-            if os.path.exists(new_filepath): # check if file already exists
-                self.log(f"New invoice file already exists at {new_filepath}", tag="orange", root=root)
+            if os.path.exists(new_filepath):  # check if file already exists
+                self.log(f"New invoice file already exists at {new_filepath}",
+                         tag="orange",
+                         display=True)
                 new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
             os.rename(filepath, new_filepath)
-            self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {root.current_date} {root.current_time}", tag="lgreen", root=root)
+            self.log(
+                f"Created new invoice file {os.path.basename(new_filepath)}",
+                tag="lgreen",
+                display=True)
             return [new_filepath, "template"]
 
         # If in away mode, just print and move to away label
@@ -56,34 +59,38 @@ class RectangulatorHandler:
             self.print_invoice(filepath, root)
             return
 
-        self.log(f"Template required for {filename}  --- {root.current_time} {root.current_date}", root=root)
-        
-        try:
-            if not testing:
-                self.send_email("Must create template", root) # email me
+        self.log(f"Template required for {filename}", display=True)
 
-            rectangulator, text_box = self.open_rectangulator(filepath, template_folder, root) # get filename from rectangulator
-        
-            if filename and filename.startswith("Test_"): # if using text inbox
+        try:
+            # Tries to return list of [filename, should_print] or [None, False], or special flags
+            if not testing:
+                self.send_email("Must create template", root)  # email me
+
+            rectangulator, text_box = self.open_rectangulator(
+                filepath, template_folder,
+                root)  # get filename from rectangulator
+
+            if filename and filename.startswith("Test_"):  # if using text inbox
                 return ["test_email"]
-            if not rectangulator and not text_box: # if the window was closed
+            if not rectangulator and not text_box:  # if the window was closed
                 return []
-            if not self.invoice:#  if the user clicked the "Not An Invoice" button
+            if not self.invoice:  #  if the user clicked the "Not An Invoice" button
                 self.invoice = True
                 return ["not_invoice", False]
             filename = rectangulator.rename_pdf()
-            if filename: # if the user dragged a rectangle
+            if filename:  # if the user dragged a rectangle
                 return [filename, self.should_print]
-            elif text_box.text: # if the user entered a filename
-                return [os.path.join(os.path.dirname(filepath), f"{text_box.text}.pdf"), self.should_print]
-
+            elif text_box.text:  # if the user entered a filename
+                return [ 
+                    os.path.join(os.path.dirname(filepath), 
+                    f"{text_box.text}.pdf"), self.should_print]
         except Exception as e:
-            self.log(f"An error occurred while drawing rectangles: {str(e)}", tag="red", root=root)
-
+            self.log(f"An error occurred while rectangulating: {str(e)}",
+                     tag="red",
+                     display=True)
         return [None, False]
 
-
-    def check_templates(self, pdf_path, template_folder, root): # Check if a template exists for the invoice
+    def check_templates(self, pdf_path, template_folder, root):  # Check if a template exists for the invoice
         for file in glob.glob(rf"{template_folder}\*.txt"):
             try:
                 with open(file, "r") as f:
@@ -93,144 +100,192 @@ class RectangulatorHandler:
                         invoice_date = f.readline().split("?")
                         invoice_num = f.readline().split("?")
 
-                        if not invoice_name or not invoice_date or not invoice_num: 
+                        if not invoice_name or not invoice_date or not invoice_num:
                             break
 
                         # Get the company name from the invoice
-                        identifier = self.get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path)
+                        identifier = self.get_text_in_rect(
+                            Rectangle((invoice_name[1], invoice_name[2]),
+                                      invoice_name[3], invoice_name[4]),
+                            pdf_path)
 
                         # If company name on invoice matches name on template, use that template
                         if identifier.strip() and invoice_name[0] == identifier:
                             self.log(f"Used template {file} for {identifier}")
                             # Get the invoice date and number from the invoice
-                            invoice_date = self.get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
-                            invoice_num = self.get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
+                            invoice_date = self.get_text_in_rect(
+                                Rectangle((invoice_date[1], invoice_date[2]),
+                                          invoice_date[3], invoice_date[4]),
+                                pdf_path)
+                            invoice_num = self.get_text_in_rect(
+                                Rectangle((invoice_num[1], invoice_num[2]),
+                                          invoice_num[3], invoice_num[4]),
+                                pdf_path)
                             # Clean the invoice date
-                            invoice_date = self.check_date_outlier(invoice_name[0], invoice_date).replace("/", "-")
-                            return [rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf"]
+                            invoice_date = self.check_date_outlier(
+                                invoice_name[0],
+                                invoice_date).replace("/", "-")
+                            return [
+                                rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf"
+                            ]
             except Exception as e:
                 pass
 
+    def open_rectangulator(self, pdf_path, template_folder, root):  # Setup the page for the Rectangulator and return the Rectangulator and textbox
+        self.done_var.set(0)  # reset done variable
+        doc = fitz.open(pdf_path)
+        page = doc[0]
+        pix = page.get_pixmap()
+        img_array = np.frombuffer(pix.samples,
+                                  dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+        doc.close()
 
-    def open_rectangulator(self, pdf_path, template_folder, root): # Setup the page for the Rectangulator and return the Rectangulator and textbox
-            self.done_var.set(0) # reset done variable
-            doc = fitz.open(pdf_path)
-            page = doc[0]
-            pix = page.get_pixmap()
-            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-            doc.close()
+        self.ax.clear()
+        self.ax.imshow(img_array)
+        self.ax.axis("off")
+        self.fig.canvas.draw()
 
-            self.ax.clear()
-            self.ax.imshow(img_array)
-            self.ax.axis("off")
-            self.fig.canvas.draw()
+        # Create a Not An Invoice button
+        not_inv_button_ax = self.fig.add_axes([0.65, 0.005, 0.18, 0.075])
+        not_inv_button = Button(not_inv_button_ax, "Not An Invoice")
 
-            # Create a Not An Invoice button
-            not_inv_button_ax = self.fig.add_axes([0.65, 0.05, 0.2, 0.075])
-            not_inv_button = Button(not_inv_button_ax, "Not An Invoice")
-            def not_invoice(event): # If the user clicks the "Not Invoice" button
-                self.invoice = False
-                self.ax.clear()
-                self.ax.axis("off")
-                self.fig.canvas.draw_idle()
-                self.done_var.set(1)
-            not_inv_button.on_clicked(not_invoice)
-
-            # Create a checkbox for if it should be printed
-            print_checkbox_ax = self.fig.add_axes([0.9, 0.1, 0.03, 0.03])
-            print_checkbox = CheckButtons(print_checkbox_ax, [""], [True])
-            def print_callback(label):
-                self.should_print = not self.should_print
-            print_checkbox.on_clicked(print_callback)
-            # Set the checkbox to be a square and centered
-            for i, line in enumerate(print_checkbox.lines):
-                rect = print_checkbox.rectangles[i]
-                rect.set_width(0.5)
-                rect.set_height(0.5)
-                rect.set_edgecolor("none")
-                # Calculate the center of the rectangle
-                center_x = rect.get_x() + rect.get_width() / 2
-                center_y = rect.get_y() + rect.get_height() / 2
-                # Update the line positions to be centered
-                line[0].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
-                line[1].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
-                line[0].set_ydata([center_y - rect.get_height() / 4, center_y + rect.get_height() / 4])
-                line[1].set_ydata([center_y + rect.get_height() / 4, center_y - rect.get_height() / 4])
-            print_label = self.fig.text(0.896, 0.1, "Print?", fontsize=10)
-
-            # Filename text box and submit button
-            text_box_ax = self.fig.add_axes([0.1, 0.05, 0.45, 0.075])
-            text_box = TextBox(text_box_ax, label="", initial="")
-            def on_text_submit(text):
-                if self.hit_submit:
-                    return
-                self.hit_submit = True
-
-                def answer_thread():
-                    filename_is_correct = self.create_alert(f"Is '{text_box.text}' the correct filename?")
-                    self.hit_submit = False
-                    if filename_is_correct:
-                        self.ax.clear()
-                        self.ax.axis("off")
-                        self.fig.canvas.draw_idle()
-                        self.done_var.set(1) # signal that the user is done
-                
-                threading.Thread(target=answer_thread).start() # run in a separate thread to avoid blocking the main thread
-            text_box.on_submit(on_text_submit)
-
-            submit_button_ax = self.fig.add_axes([0.45, 0.05, 0.15, 0.075])
-            submit_button = Button(submit_button_ax, "Submit")
-            submit_button.on_clicked(on_text_submit)
-
-            # Create text labels for instructions and text box
-            text_box_label = self.fig.text(0.2, 0.14, "Enter Filename (mm-dd-yy_invoice#)", fontsize=10)
-            instruction_label = self.fig.text(0.25, 0.94, "- Draw boxes around Company Name, Date, and Invoice (in that order)", fontsize=10)
-            instruction_label_2 = self.fig.text(0.25, 0.92, "- Company Name can be any piece of text unique to that vendor", fontsize=10)
-            instruction_label_3 = self.fig.text(0.25, 0.90, "- Right click to verify and save", fontsize=10)
-            
-            self.fig.canvas.draw_idle()
-            rectangulator = Rectangulator(self.ax, self.fig, pdf_path, template_folder, self)
-            root.root.wait_variable(self.done_var) # wait for the user to finish
-
-            # Remove the text labels and rectangles
-            for ax in [text_box_ax, not_inv_button_ax, print_checkbox_ax, submit_button_ax]:
-                self.fig.delaxes(ax)
-            for label in [text_box_label, instruction_label, instruction_label_2, instruction_label_3, print_label]:
-                label.remove()
-            for cid in rectangulator.cids:
-                self.fig.canvas.mpl_disconnect(cid)
-            rectangulator.cids.clear()
+        def not_invoice(event):  # If the user clicks the "Not Invoice" button
+            self.invoice = False
             self.ax.clear()
             self.ax.axis("off")
             self.fig.canvas.draw_idle()
+            self.done_var.set(1)
 
-            return rectangulator, text_box
+        not_inv_button.on_clicked(not_invoice)
 
+        # Create a checkbox for if it should be printed
+        print_checkbox_ax = self.fig.add_axes([0.9, 0.03, 0.03, 0.03])
+        print_checkbox = CheckButtons(print_checkbox_ax, [""], [True])
+        def print_callback(label):
+            self.should_print = not self.should_print
+        print_checkbox.on_clicked(print_callback)
+        # Set the checkbox to be a square and centered
+        for i, line in enumerate(print_checkbox.lines):
+            rect = print_checkbox.rectangles[i]
+            rect.set_width(1)
+            rect.set_height(1)
+            rect.set_edgecolor("none")
+            # Calculate the center of the rectangle
+            center_x = rect.get_width() / 2
+            center_y = rect.get_height() / 2
+            # Update the line positions to be centered
+            line[0].set_xdata([
+                center_x - rect.get_width() / 4,
+                center_x + rect.get_width() / 4
+            ])
+            line[1].set_xdata([
+                center_x - rect.get_width() / 4,
+                center_x + rect.get_width() / 4
+            ])
+            line[0].set_ydata([
+                center_y - rect.get_height() / 4,
+                center_y + rect.get_height() / 4
+            ])
+            line[1].set_ydata([
+                center_y + rect.get_height() / 4,
+                center_y - rect.get_height() / 4
+            ])
+        print_label = self.fig.text(0.89, 0.075, "Print?", fontsize=10)
 
-    def print_invoice(self, filepath, root): # Printer
+        # Filename text box and submit button
+        text_box_ax = self.fig.add_axes([0.1, 0.005, 0.35, 0.075])
+        text_box = TextBox(text_box_ax, label="", initial="")
+
+        def on_text_submit(text):
+            if self.hit_submit:
+                return
+            self.hit_submit = True
+
+            def answer_thread():
+                filename_is_correct = self.create_alert(f"Is '{text_box.text}' the correct filename?")
+                self.hit_submit = False
+                if filename_is_correct:
+                    self.ax.clear()
+                    self.ax.axis("off")
+                    self.fig.canvas.draw_idle()
+                    self.done_var.set(1)  # signal that the user is done
+
+            # run in a separate thread to avoid blocking the main thread
+            threading.Thread(target=answer_thread).start()  
+        text_box.on_submit(on_text_submit)
+
+        submit_button_ax = self.fig.add_axes([0.45, 0.005, 0.15, 0.075])
+        submit_button = Button(submit_button_ax, "Submit")
+        submit_button.on_clicked(on_text_submit)
+
+        # Create text labels for instructions and text box
+        text_box_label = self.fig.text(
+            0.1,
+            0.089,
+            "Enter Filename (mm-dd-yy_invoice#)",
+            fontsize=10)
+        instruction_label = self.fig.text(
+            0.1,
+            0.94,
+            "- Draw boxes around Company Name, Date, and Invoice (in that order)",
+            fontsize=10)
+        instruction_label_2 = self.fig.text(
+            0.1,
+            0.92,
+            "- Company Name can be any piece of text unique to that vendor",
+            fontsize=10)
+        instruction_label_3 = self.fig.text(
+            0.1,
+            0.90,
+            "- Right click to verify and save",
+            fontsize=10)
+
+        self.fig.canvas.draw_idle()
+        rectangulator = Rectangulator(self.ax, self.fig, pdf_path,
+                                      template_folder, self)
+        root.root.wait_variable(self.done_var)  # wait for the user to finish
+
+        # Remove the text labels and rectangles
+        for ax in [text_box_ax, not_inv_button_ax, print_checkbox_ax, submit_button_ax]:
+            self.fig.delaxes(ax)
+        for label in [text_box_label, instruction_label, instruction_label_2, instruction_label_3, print_label]:
+            label.remove()
+        for cid in rectangulator.cids:
+            self.fig.canvas.mpl_disconnect(cid)
+        rectangulator.cids.clear()
+        self.ax.clear()
+        self.ax.axis("off")
+        self.fig.canvas.draw_idle()
+
+        return rectangulator, text_box
+
+    def print_invoice(self, filepath):  # Printer
         try:
             # Get default printer and print
             p = win32print.GetDefaultPrinter()
-            win32api.ShellExecute(0, "print", filepath, None,  ".",  0)
-            self.log(f"Printed {os.path.basename(filepath)} completed successfully.", tag="blue", root=root)
+            win32api.ShellExecute(0, "print", filepath, None, ".", 0)
+            self.log(
+                f"Printed {os.path.basename(filepath)} completed successfully.",
+                tag="lgreen",
+                display=True)
             return True
         except Exception as e:
-            self.log(f"Printing failed for {filepath}: {str(e)}", tag="red", send_email=True, root=root)
+            self.log(f"Printing failed for {filepath}: {str(e)}",
+                     tag="red",
+                     send_email=True,
+                     display=True)
             return False
 
-
-    def log(self, *args, tag="purple", send_email=False, root=None): # Log messages to a file and optionally send an email
-        message = " ".join([str(arg) for arg in args]) 
-        if root:
-            root.log(message, tag=tag, send_email=send_email)
-        elif self.root:
+    def log(self, *args, tag="purple", send_email=False, display=False):  # Log messages to a file and optionally send an email
+        message = " ".join([str(arg) for arg in args])
+        if display:
             self.root.log(message, tag=tag, send_email=send_email)
+        else:
+            print(f"-{message}")
         if send_email:
-            self.send_email(message, root)
-        print(message)
+            self.send_email(message, self.root)
 
-
-    def move_email(self, mail, label, og_label, root): # Moves email to label
+    def move_email(self, mail, label, og_label, root):  # Moves email to label
         subject = "Unknown"
         try:
             # Get msg and subject if possible
@@ -243,18 +298,21 @@ class RectangulatorHandler:
             # Mark the original email as deleted
             root.imap.uid('STORE', mail, '+FLAGS', '(\Deleted)')
             root.imap.expunge()
-            self.log(f"Moved email '{subject}' from {og_label} to {label}.", tag="blue", root=root)
+            self.log(f"Moved email '{subject}' from {og_label} to {label}.",
+                     tag="blue",
+                     display=True)
         except Exception as e:
-            self.log(f"Transfer failed for '{subject}': {str(e)}", tag="red", send_email=True, root=root)
+            self.log(f"Transfer failed for '{subject}': {str(e)}",
+                     tag="red",
+                     send_email=True,
+                     display=True)
 
-
-
-    def sanitize_filename(self, filename): # Remove invalid characters from the filename
-        sanitized_filename = re.sub(r"[^\w_. -]", "", filename.replace("/", "-"))
+    def sanitize_filename(self, filename):  # Remove invalid characters from the filename
+        sanitized_filename = re.sub(r"[^\w_. -]", "",
+                                    filename.replace("/", "-"))
         return sanitized_filename.strip()
 
-
-    def get_text_in_rect(self, rect, pdf_path): # Get the text within a specified rectangle in a PDF document
+    def get_text_in_rect(self, rect, pdf_path):  # Get the text within a specified rectangle in a PDF document
         doc = None
         try:
             # Retrieve the text within the specified rectangle
@@ -271,10 +329,10 @@ class RectangulatorHandler:
             # Find words that fall within the specified rectangle
             extracted_text = ""
             for word in words:
-                word_x, word_y, _, _ = word[:4] # get word coordinates
-                if x <= float(word_x) <= x + width and y <= float(word_y) <= y + height:
-                    extracted_text += word[4] + " " # append the word to extracted text
-            extracted_text = extracted_text.strip() # remove leading/trailing spaces
+                word_x, word_y, _, _ = word[:4]  # get word coordinates
+                if (x <= float(word_x) <= x + width) and (y <= float(word_y) <= y + height):
+                    extracted_text += word[4] + " "  # append the word to extracted text
+            extracted_text = extracted_text.strip()  # remove leading/trailing spaces
 
             return extracted_text
         except Exception as e:
@@ -284,13 +342,36 @@ class RectangulatorHandler:
             if doc:
                 doc.close()
 
+    def check_date_outlier(self, invoice_name, invoice_date):  # Check if the date is an outlier and correct it
+        calendar = {
+            "Jan": "01",
+            "Feb": "02",
+            "Mar": "03",
+            "Apr": "04",
+            "May": "05",
+            "Jun": "06",
+            "Jul": "07",
+            "Aug": "08",
+            "Sep": "09",
+            "Oct": "10",
+            "Nov": "11",
+            "Dec": "12"
+        }
+        calendar2 = {
+            "January": "01",
+            "February": "02",
+            "March": "03",
+            "April": "04",
+            "May": "05",
+            "June": "06",
+            "July": "07",
+            "Aug": "08",
+            "September": "09",
+            "October": "10",
+            "November": "11",
+            "December": "12"
+        }
 
-    def check_date_outlier(self, invoice_name, invoice_date): # Check if the date is an outlier and correct it
-        calendar = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04", "May": "05", "Jun": "06", 
-                    "Jul": "07", "Aug": "08", "Sep": "09", "Oct": "10", "Nov": "11", "Dec": "12"}
-        calendar2 = {"January": "01", "February": "02", "March": "03", "April": "04", "May": "05", "June": "06", 
-                    "July": "07", "Aug": "08", "September": "09", "October": "10", "November": "11", "December": "12"}
-        
         if invoice_name == "BUZZI UNICEM USA - Cement":
             # Uses format "DD-Month-YY"
             invoice_date = invoice_date.split("-")
@@ -298,21 +379,22 @@ class RectangulatorHandler:
             invoice_date[0] = calendar[invoice_date[1]]
             invoice_date[1] = day
             return "-".join(invoice_date)
+        
         elif invoice_name in {"Alight Solutions LLC", "Compliance Management International", "Taylor Northeast Inc."}:
             # Uses format "Month DD, YYYY"
             invoice_date = invoice_date.replace(",", "").split(" ")
             invoice_date[0] = calendar2[invoice_date[0]]
             invoice_date = "/".join(invoice_date)
+
         elif invoice_name in {"ADP SCREENING  SELECTION SERVICES", "Muka Development Group Llc"}:
             # Uses format "Mon DD, YYYY"
             invoice_date = invoice_date.replace(",", "").split(" ")
             invoice_date[0] = calendar[invoice_date[0]]
             invoice_date = "/".join(invoice_date)
-        
+
         return self.clean_date(invoice_date.strip())
 
-
-    def clean_date(self, invoice_date): # Clean the date to be in the format "MM/DD/YY"
+    def clean_date(self, invoice_date):  # Clean the date to be in the format "MM/DD/YY"
         new_date = invoice_date
         try:
             date = datetime.strptime(new_date, "%m/%d/%y")
@@ -327,9 +409,8 @@ class RectangulatorHandler:
         if new_date != invoice_date:
             self.log(f"Changed date from {invoice_date} to {new_date}")
         return new_date
-        
 
-    def send_email(self, body, root): # Sends email to me
+    def send_email(self, body, root):  # Sends email to me
         if root:
             sender_email = f"{root.username}{config.ADDRESS}"
             password = root.password
@@ -338,7 +419,7 @@ class RectangulatorHandler:
         else:
             sender_email = f"{config.ACP_USER}{config.ADDRESS}"
             password = config.ACP_PASS
-            
+
         try:
             # Create a multipart message and set headers
             message = MIMEMultipart()
@@ -351,22 +432,23 @@ class RectangulatorHandler:
             with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
                 server.starttls()
                 server.login(sender_email, password)
-                server.sendmail(sender_email, config.RECEIVER_EMAIL, message.as_string())
+                server.sendmail(sender_email, config.RECEIVER_EMAIL,
+                                message.as_string())
+            self.log(f"Email sent successfully: {body}")
         except Exception as e:
-                self.log(f"Error sending email {body} - {str(e)}")
+            self.log(f"Error sending email {body} - {str(e)}")
 
-
-    def create_alert(self, message, numbered_buttons=0): # Create an alert window for user input
+    def create_alert(self, message, numbered_buttons=0):  # Create an alert window for user input
         parent = self.root.alert_container
         panel = AlertWindow(parent, message, numbered_buttons)
         panel.pack(fill=tk.BOTH, expand=True)
         parent.lift()
         panel.grab_set()
         panel.focus_set()
-        answer = panel.get_answer() # wait for user input
-        panel.destroy() # destroy the alert window
-        parent.lower() # lower the alert container
-        return answer 
+        answer = panel.get_answer()  # wait for user input
+        panel.destroy()  # destroy the alert window
+        parent.lower()  # lower the alert container
+        return answer
 
 
 class Rectangulator:
@@ -379,12 +461,12 @@ class Rectangulator:
         self.fig = fig
         self.ax = ax
 
-        self.rectangles = [] # contains rectangle objects
-        self.coordinates = [] # contains coordinates of rectangle objects
-        self.correcting_rect_index = None # used when redrawing specific rectangle
+        self.rectangles = []  # contains rectangle objects
+        self.coordinates = []  # contains coordinates of rectangle objects
+        self.correcting_rect_index = None  # used when redrawing specific rectangle
         self.start_x = None
         self.start_y = None
-        self.rect = None 
+        self.rect = None
         self.zoom_factor = 1.2
         self.pan_factor = 1
         self.pan_start = None
@@ -395,36 +477,50 @@ class Rectangulator:
 
         # Connect the event handlers to the canvas
         self.cids = []
-        cid1 = self.ax.figure.canvas.mpl_connect("button_press_event", self.on_button_press)
-        cid2 = self.ax.figure.canvas.mpl_connect("button_release_event", self.on_button_release)
-        cid3 = self.ax.figure.canvas.mpl_connect("motion_notify_event", self.on_move)
-        cid4 = self.ax.figure.canvas.mpl_connect("scroll_event", self.on_scroll)
-        cid5 = self.ax.figure.canvas.mpl_connect("key_press_event", self.on_key_press)
+        cid1 = self.ax.figure.canvas.mpl_connect("button_press_event",
+                                                 self.on_button_press)
+        cid2 = self.ax.figure.canvas.mpl_connect("button_release_event",
+                                                 self.on_button_release)
+        cid3 = self.ax.figure.canvas.mpl_connect("motion_notify_event",
+                                                 self.on_move)
+        cid4 = self.ax.figure.canvas.mpl_connect("scroll_event",
+                                                 self.on_scroll)
+        cid5 = self.ax.figure.canvas.mpl_connect("key_press_event",
+                                                 self.on_key_press)
         self.cids.extend([cid1, cid2, cid3, cid4, cid5])
 
-
-    def rename_pdf(self): # Rename the PDF based on extracted text from rectangles
+    def rename_pdf(
+            self):  # Rename the PDF based on extracted text from rectangles
         try:
-            if len(self.rectangles) == 3 and all(self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles):
+            if len(self.rectangles) == 3 and all(
+                    self.rectangulator_handler.get_text_in_rect(
+                        rect, self.pdf_path) for rect in self.rectangles):
                 self.save_template()
-            
+
                 # Rename the PDF based on extracted text from rectangles in format "MM-DD-YY_INVOICE_NUMBER"
-                extracted_texts = [self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles if self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path)]
-                extracted_texts[1] = self.rectangulator_handler.check_date_outlier(extracted_texts[0], extracted_texts[1]) # fix date
-                extracted_text_combined = "_".join(extracted_texts[1:]) # combine date and invoice number
-                sanitized_extracted_text = self.rectangulator_handler.sanitize_filename(extracted_text_combined) # sanitize the text
-                new_filepath = os.path.join(os.path.dirname(self.pdf_path), f"{sanitized_extracted_text}.pdf") # combine the path and filename
-                return new_filepath 
+                extracted_texts = [
+                    self.rectangulator_handler.get_text_in_rect(
+                        rect, self.pdf_path) for rect in self.rectangles
+                    if self.rectangulator_handler.get_text_in_rect(
+                        rect, self.pdf_path)
+                ]
+                extracted_texts[1] = self.rectangulator_handler.check_date_outlier(extracted_texts[0], extracted_texts[1])  # fix date
+                extracted_text_combined = "_".join(extracted_texts[1:])  # combine date and invoice number
+                sanitized_extracted_text = self.rectangulator_handler.sanitize_filename(extracted_text_combined)  # sanitize the text
+                new_filepath = os.path.join(os.path.dirname(self.pdf_path),
+                                            f"{sanitized_extracted_text}.pdf"
+                                            )  # combine the path and filename
+                return new_filepath
         except RecursionError:
             self.rectangulator_handler.log("Window closed please try again")
             return None
         except Exception as e:
             self.rectangulator_handler.log(traceback.format_exc())
-            self.rectangulator_handler.log(f"Error occurred with download, {str(e)}")
+            self.rectangulator_handler.log(
+                f"Error occurred with download, {str(e)}")
             return None
-        
 
-    def save_template(self): # Save the template to a text file
+    def save_template(self):  # Save the template to a text file
         # Save the template to a text file as Company Name?x?y?width?height and so on
         filename = rf"{self.template_folder}\{self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path))}.txt"
         # Check if the file already exists or filename is empty
@@ -433,63 +529,76 @@ class Rectangulator:
         with open(filename, "a") as file:
             for i, coord in enumerate(self.coordinates):
                 x, y, width, height = coord
-                rect_text = self.rectangulator_handler.get_text_in_rect(self.rectangles[i], self.pdf_path)
+                rect_text = self.rectangulator_handler.get_text_in_rect(
+                    self.rectangles[i], self.pdf_path)
                 text = f"{rect_text}?{x}?{y}?{width}?{height}\n"
-                if i == 0: # need to sanitize company name
+                if i == 0:  # need to sanitize company name
                     file.write(f"{self.rectangulator_handler.sanitize_filename(rect_text)}?{x}?{y}?{width}?{height}\n")
                 else:
                     file.write(text)
         self.rectangulator_handler.log(f"Created vendor invoice template {self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path)}")
 
-
-    def on_key_press(self, event): # Handle key press events
-        if event.key == "escape": # reset zoom and position
+    def on_key_press(self, event):  # Handle key press events
+        if event.key == "escape":  # reset zoom and position
             self.ax.set_xlim(self.initial_xlim)
             self.ax.set_ylim(self.initial_ylim)
             self.pan_start = None
             self.ax.figure.canvas.draw()
 
-
-    def on_button_press(self, event): # Handle left and right mouse button press events
+    def on_button_press(
+            self, event):  # Handle left and right mouse button press events
         if event.button == 1:  # left mouse button, draw rectangles
             # Ignore if the mouse click is outside the plot area
             if event.xdata is None or event.ydata is None:
-                return 
-            
+                return
+
             # Start drawing a rectangle
             self.start_x = event.xdata
             self.start_y = event.ydata
-            self.rect = Rectangle((self.start_x, self.start_y), 0, 0, edgecolor="red", linewidth=2, fill=False)
+            self.rect = Rectangle(
+                (self.start_x, self.start_y),
+                0,
+                0,
+                edgecolor="red",
+                linewidth=2,
+                fill=False)
             self.ax.add_patch(self.rect)
             self.ax.figure.canvas.draw()
 
-        elif event.button == 2: # middle mouse button, pan
+        elif event.button == 2:  # middle mouse button, pan
             self.pan_start = (event.x, event.y)
 
-        elif event.button == 3: # right mouse button, save rectangles
+        elif event.button == 3:  # right mouse button, save rectangles
             # Check if 3 rectangles have been drawn
             if len(self.rectangles) != 3:
-                self.rectangulator_handler.log("Please draw exactly three rectangles")
+                self.rectangulator_handler.log(
+                    "Please draw exactly three rectangles", display=True)
                 self.reset_rectangles()
                 return
-            
+
             # Ask for verifictaion
             def handle_user_input():
                 if self.correcting_rect_index is not None:
                     corrected_rect = self.rectangles.pop()
                     corrected_coord = self.coordinates.pop()
-                    self.rectangles.insert(self.correcting_rect_index, corrected_rect)
-                    self.coordinates.insert(self.correcting_rect_index, corrected_coord)
+                    self.rectangles.insert(self.correcting_rect_index,
+                                           corrected_rect)
+                    self.coordinates.insert(self.correcting_rect_index,
+                                            corrected_coord)
 
                 # Show extracted text for verification
                 headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
                 extracted_text = ""
                 for i, rect in enumerate(self.rectangles):
-                    extracted_text += (headers[i] + self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) + "\n")
-                text_is_correct = self.rectangulator_handler.create_alert(f"Does the following text match what you selected?\n\n{extracted_text}", numbered_buttons=3)
+                    extracted_text += (
+                        headers[i] +
+                        self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) + "\n")
+                text_is_correct = self.rectangulator_handler.create_alert(
+                    f"Does the following text match what you selected?\n\n{extracted_text}",
+                    numbered_buttons=3)
 
                 # If user says yes, close the window, otherwise reset the rectangles
-                if isinstance(text_is_correct, int) and not isinstance(text_is_correct, bool):
+                if isinstance(text_is_correct,int) and not isinstance(text_is_correct, bool):
                     self.correcting_rect_index = text_is_correct
                     self.rectangulator_handler.log(f"Please reselect {headers[self.correcting_rect_index]}")
                     self.reset_rectangles(specific_rect=self.correcting_rect_index)
@@ -499,31 +608,31 @@ class Rectangulator:
                     self.fig.canvas.draw_idle()
                     self.rectangulator_handler.done_var.set(1)
                 else:
-                    self.rectangulator_handler.log("Please reselect rectangles")
+                    self.rectangulator_handler.log("Please reselect rectangles", display=True)
                     self.reset_rectangles()
 
             input_thread = threading.Thread(target=handle_user_input)
             input_thread.start()
 
-
-    def on_button_release(self, event): # Handle key release events
-        if event.button == 1 and self.rect: # left mouse button, save rectangle
+    def on_button_release(self, event):  # Handle key release events
+        if event.button == 1 and self.rect:  # left mouse button, save rectangle
             self.start_x = None
             self.start_y = None
 
             # Append rectangle and coordinated to list
             self.rectangles.append(self.rect)
-            self.coordinates.append((self.rect.get_x(), self.rect.get_y(), self.rect.get_width(), self.rect.get_height()))  # store coordinates
+            self.coordinates.append(
+                (self.rect.get_x(), self.rect.get_y(), self.rect.get_width(),
+                 self.rect.get_height()))  # store coordinates
             self.rect = None
             self.ax.figure.canvas.draw()
 
-        elif event.button == 2: # middle mouse button, stop panning
+        elif event.button == 2:  # middle mouse button, stop panning
             self.pan_start = None
             self.prev_x = None
             self.prev_y = None
 
-
-    def on_move(self, event): # Continuously update drawn rectangles
+    def on_move(self, event):  # Continuously update drawn rectangles
         # Pan if middle mouse button is pressed
         if event.button == 2 and self.pan_start:
             if self.prev_x is not None and self.prev_y is not None:
@@ -538,11 +647,11 @@ class Rectangulator:
                 self.ax.set_xlim(new_xlim)
                 self.ax.set_ylim(new_ylim)
                 self.ax.figure.canvas.draw_idle()
-            
+
             self.prev_x = event.x
             self.prev_y = event.y
             return
-        
+
         if self.rect is None or self.start_x is None or self.start_y is None:
             return
 
@@ -563,15 +672,14 @@ class Rectangulator:
         self.rect.set_height(height)
         self.ax.figure.canvas.draw()
 
-
-    def on_scroll(self, event): # Zoom in and out
-        if event.button == "down": # out
+    def on_scroll(self, event):  # Zoom in and out
+        if event.button == "down":  # out
             self.zoom(event.xdata, event.ydata, 1 / self.zoom_factor)
-        elif event.button == "up": # in
+        elif event.button == "up":  # in
             self.zoom(event.xdata, event.ydata, self.zoom_factor)
 
-
-    def reset_rectangles(self, specific_rect=None): # Reset the current rectangles
+    def reset_rectangles(self,
+                         specific_rect=None):  # Reset the current rectangles
         if specific_rect is not None:
             self.rectangles[specific_rect].remove()
             self.rectangles.pop(specific_rect)
@@ -582,12 +690,11 @@ class Rectangulator:
                 rect.remove()
             self.rectangles = []
             self.coordinates = []
-            self.rect = None  
+            self.rect = None
             self.correcting_rect_index = None
             self.ax.figure.canvas.draw()
 
-
-    def zoom(self, x, y, zoom_factor): # Zoom in and out with scroll wheel
+    def zoom(self, x, y, zoom_factor):  # Zoom in and out with scroll wheel
         xlim = self.ax.get_xlim()
         ylim = self.ax.get_ylim()
         if xlim is None or ylim is None:
@@ -598,8 +705,10 @@ class Rectangulator:
             x = np.mean(xlim)
         if y is None:
             y = np.mean(ylim)
-        new_xlim = ((xlim[0] - x) / zoom_factor) + x, ((xlim[1] - x) / zoom_factor) + x
-        new_ylim = ((ylim[0] - y) / zoom_factor) + y, ((ylim[1] - y) / zoom_factor) + y
+        new_xlim = ((xlim[0] - x) / zoom_factor) + x, (
+            (xlim[1] - x) / zoom_factor) + x
+        new_ylim = ((ylim[0] - y) / zoom_factor) + y, (
+            (ylim[1] - y) / zoom_factor) + y
 
         self.ax.set_xlim(new_xlim)
         self.ax.set_ylim(new_ylim)
