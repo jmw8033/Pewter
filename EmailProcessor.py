@@ -36,20 +36,10 @@ class RedirectText:
 class EmailProcessor:
 
     # CONSTANTS
-    LOG_FILE = config.LOG_FILE
     ICON_PATH = os.path.join(os.path.dirname(__file__), "Hotpot.ico")
     TEMPLATE_FOLDER = config.TEMPLATE_FOLDER
     INVOICE_FOLDER = config.INVOICE_FOLDER
-    IMAP_SERVER = config.IMAP_SERVER
-    SMTP_SERVER = config.SMTP_SERVER
-    RECEIVER_EMAIL = config.RECEIVER_EMAIL
-    TRUSTED_ADDRESS = config.TRUSTED_ADDRESS
-    ADDRESS = config.ADDRESS
-    CYCLE_TIME = config.INBOX_CYCLE_TIME
-    RECONNECT_CYCLE_COUNT = config.RECONNECT_CYCLE_COUNT
-    TEST_INVOICE = config.TEST_INVOICE
-    TEST_INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
-    TEST_TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
+    RECONNECT_CYCLE_COUNT = config.RECONNECT_TIME // config.INBOX_CYCLE_TIME
 
     def __init__(self, username, password):
         try:
@@ -221,24 +211,55 @@ class EmailProcessor:
                                    yscrollcommand=scrollbar.set)
             console_text.pack(fill=tk.BOTH, expand=True)
             scrollbar.config(command=console_text.yview)
-
             # Redirect stdout and stderr to console
             sys.stdout = RedirectText(console_text)
             sys.stderr = RedirectText(console_text)
 
+            # Settings tab
+            self.settings_tab = tk.Frame(self.notebook)
+            self.notebook.add(self.settings_tab, text="Settings")
+            self.vars = {
+                "USERNAME": tk.StringVar(value=config.APC_USER),
+                "PASSWORD": tk.StringVar(value=config.APC_PASS),
+                "LOG_FILE": tk.StringVar(value=config.LOG_FILE),
+                "INVOICE_FOLDER": tk.StringVar(value=config.INVOICE_FOLDER),
+                "TEMPLATE_FOLDER": tk.StringVar(value=config.TEMPLATE_FOLDER),
+                "INBOX_CYCLE_TIME": tk.IntVar(value=config.INBOX_CYCLE_TIME),
+                "RECONNECT_TIME": tk.IntVar(value=config.RECONNECT_TIME),
+            }
+            for i, (key, var) in enumerate(self.vars.items()):
+                label = tk.Label(self.settings_tab, text=key + ":")
+                label.grid(row=i, column=0, padx=5, pady=5, sticky=tk.W)
+                entry = tk.Entry(self.settings_tab, textvariable=var, width=50)
+                entry.grid(row=i, column=1, padx=5, pady=5, sticky=tk.W)
+
+            # About tab
+            self.about_tab = tk.Frame(self.notebook)
+            self.notebook.add(self.about_tab, text="About")
+            about_text = (
+                "Pewter Email Processor v1.0\n"
+            )
+            tk.Message(
+                self.about_tab,
+                text=about_text,
+                width=500,
+                justify=tk.LEFT,
+                font=("Courier", 11),
+            ).pack(padx=10, pady=10)
+
             # GUI STYLES
             self.log_text_widget.tag_configure("red", background="#FFCCCC")
-            self.log_text_widget.tag_configure("yellow", background="yellow")
             self.log_text_widget.tag_configure("orange", background="#FFB434")
+            self.log_text_widget.tag_configure("yellow", background="#FAFA33")
             self.log_text_widget.tag_configure("lgreen", background="#CCFFCC")
             self.log_text_widget.tag_configure("green", background="#39FF12")
             self.log_text_widget.tag_configure("dgreen", background="#00994d")
-            self.log_text_widget.tag_configure("blue", background="#89CFF0")
-            self.log_text_widget.tag_configure("purple", background="#E6E6FA")
+            self.log_text_widget.tag_configure("blue", background="#00FFFF")
+            self.log_text_widget.tag_configure("purple", background="#CCCCFF")
             self.log_text_widget.tag_configure("gray", background="#DEDDDD")
             self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD")
             self.log_text_widget.tag_configure("label_error", background="#FFB434")
-            self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8)  # default
+            self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8)  # applied to all messages
 
             self.root.protocol(
                 "WM_DELETE_WINDOW",
@@ -250,14 +271,14 @@ class EmailProcessor:
 
     def main(self):  # Runs when start button is pressed
         if self.TESTING:  # set appropriate folders for testing
-            self.TEMPLATE_FOLDER = self.TEST_TEMPLATE_FOLDER
-            self.INVOICE_FOLDER = self.TEST_INVOICE_FOLDER
+            self.TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
+            self.INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
             self.log("Testing mode enabled", tag="yellow")
         else:
             self.TEMPLATE_FOLDER = config.TEMPLATE_FOLDER
             self.INVOICE_FOLDER = config.INVOICE_FOLDER
 
-        with open(self.LOG_FILE, "a") as file:  # open log file
+        with open(config.LOG_FILE, "a") as file:  # open log file
             file.write("\n\n")
         self.log("Connecting...", tag="dgreen")
         self.root.update()
@@ -295,9 +316,9 @@ class EmailProcessor:
             self.log(f"An error occurred: {str(e)}", tag="red", send_email=True)
 
     def connect(self, log=True):  # Connects email, returns imap object
-        user = f"{self.username}{self.ADDRESS}"
+        user = f"{self.username}{config.ADDRESS}"
         try:
-            imap = imaplib.IMAP4_SSL(self.IMAP_SERVER)
+            imap = imaplib.IMAP4_SSL(config.IMAP_SERVER)
             imap.login(user, self.password)
             self.connected = True
             if log:
@@ -363,7 +384,7 @@ class EmailProcessor:
                             tag="no_new_emails",
                             write=False)
                         self.check_labels(["Need_Print", "Need_Login", "Errors"], self.imap)
-                        self.pause_event.wait(timeout=self.CYCLE_TIME)  # pause until next cycle
+                        self.pause_event.wait(timeout=config.INBOX_CYCLE_TIME)  # pause until next cycle
                     else:
                         for uid in new_uids:
                             threading.Thread(target=self.process_email,
@@ -410,7 +431,7 @@ class EmailProcessor:
             sender_email = email.utils.parseaddr(msg["From"])[1]
 
             # Check if sender is trusted
-            if not sender_email.endswith(self.TRUSTED_ADDRESS):
+            if not sender_email.endswith(config.TRUSTED_ADDRESS):
                 self.move_email(mail, "Not_Invoices", "INBOX", imap)
                 return
 
@@ -462,7 +483,7 @@ class EmailProcessor:
                 else:
                     self.add_to_queue(mail, part)
         self.remaining_pdfs[mail] = len(filenames)
-        self.log(f"Processing {len(filenames)} pdfs for email '{subject}'",
+        self.log(f"Processing {len(filenames)} PDF(s) for email '{subject}'",
                  tag="blue")
 
     def add_to_queue(self, mail, part, testing=False):  # Adds invoices to queue, ran by handle_attachments
@@ -522,7 +543,10 @@ class EmailProcessor:
                 return
 
             # Check if test email
-            if return_list[0] == "test_email":  
+            if return_list[0] == "test_email":       
+                self.log(
+                    f"Test complete",
+                    tag="purple")
                 self.move_email(mail, "Test_Email", "INBOX", self.imap)
                 os.remove(filepath)
                 return
@@ -602,7 +626,7 @@ class EmailProcessor:
                      send_email=True)
 
     def send_email(self, body):  # Sends email to me
-        sender_email = f"{self.username}{self.ADDRESS}"
+        sender_email = f"{self.username}{config.ADDRESS}"
         try:
             if self.TESTING:
                 return
@@ -611,14 +635,14 @@ class EmailProcessor:
             message = MIMEMultipart()
             message["Subject"] = "Alert"
             message["From"] = sender_email
-            message["To"] = self.RECEIVER_EMAIL
+            message["To"] = config.RECEIVER_EMAIL
             message.attach(MIMEText(body, "plain"))
 
             # Send the email using SMTP
-            with smtplib.SMTP(self.SMTP_SERVER, 587) as server:
+            with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
                 server.starttls()
                 server.login(sender_email, self.password)
-                server.sendmail(sender_email, self.RECEIVER_EMAIL,
+                server.sendmail(sender_email, config.RECEIVER_EMAIL,
                                 message.as_string())
         except Exception as e:
             self.log(f"Error sending email - {str(e)}", tag="red")
@@ -689,7 +713,7 @@ class EmailProcessor:
 
             # Write to the log file
             if write:
-                with open(self.LOG_FILE, "a") as file:
+                with open(config.LOG_FILE, "a") as file:
                     file.write(message + "\n")
         except Exception as e:
             print(f"Error logging: {str(e)}")
@@ -838,11 +862,11 @@ class EmailProcessor:
         self.log("Testing Rectangulator...", tag="yellow")
         return_list = []
         return_list = self.rectangulator_handler.rectangulate(
-            None, self.TEST_INVOICE, self, self.TEST_TEMPLATE_FOLDER, True)
+            "Testing Rectangulator", config.TEST_INVOICE, self, config.TEST_TEMPLATE_FOLDER, True)
         if return_list != []:
             new_filepath, should_print = return_list
             self.log(
-                f"new_filepath: {new_filepath}, should_print: {should_print}",
+                f"Test complete - new_filepath: {new_filepath}, should_print: {should_print}",
                 tag="purple")
         self.log("Testing complete.", tag="yellow")
 

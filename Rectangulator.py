@@ -40,20 +40,21 @@ class RectangulatorHandler:
 
     def rectangulate(self, filename, filepath, root, template_folder, testing=False ):  # Add a file to the queue, or process it immediately if template exists
         # Check if template exists and use it
-        template_exists = self.check_templates(filepath, template_folder, root)
-        if template_exists:
-            new_filepath = template_exists[0]
-            if os.path.exists(new_filepath):  # check if file already exists
-                self.log(f"New invoice file already exists at {new_filepath}",
-                         tag="orange",
-                         display=True)
-                new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
-            os.rename(filepath, new_filepath)
-            self.log(
-                f"Created new invoice file {os.path.basename(new_filepath)}",
-                tag="lgreen",
-                display=True)
-            return [new_filepath, "template"]
+        if filename != "Testing Rectangulator":
+            template_exists = self.check_templates(filepath, template_folder, root)
+            if template_exists:
+                new_filepath = template_exists[0]
+                if os.path.exists(new_filepath):  # check if file already exists
+                    self.log(f"New invoice file already exists at {new_filepath}",
+                            tag="orange",
+                            display=True)
+                    new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
+                os.rename(filepath, new_filepath)
+                self.log(
+                    f"Created new invoice file {os.path.basename(new_filepath)}",
+                    tag="lgreen",
+                    display=True)
+                return [new_filepath, "template"]
 
         # If in away mode, just print and move to away label
         if root.AWAY_MODE:
