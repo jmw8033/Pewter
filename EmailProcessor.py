@@ -77,13 +77,13 @@ class EmailProcessor:
                         text="Pewter") 
 
             # Layout frames (left for console, right for rectangulator)
-            alert_container = tk.Frame(  # container for alert popups
+            self.alert_container = tk.Frame(  # container for alert popups
                 program_tab,
                 relief="raised") 
-            alert_container.place(
+            self.alert_container.place(
                 relx=0.5, rely=0.5,
                 anchor=tk.CENTER)  
-            alert_container.lower()  # hide initially
+            self.alert_container.lower()  # hide initially
             right_frame = tk.Frame(program_tab)
             right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
             left_frame = tk.Frame(program_tab)
@@ -570,6 +570,7 @@ class EmailProcessor:
         try:
             return_list = self.rectangulator_handler.rectangulate(
                 filename, filepath, self, self.TEMPLATE_FOLDER, testing)
+            print(f"rectangulator returned: {return_list}")
 
             # Check if Rectangulator fails
             if return_list == [] or return_list[0] == None:
@@ -603,17 +604,22 @@ class EmailProcessor:
                 if not testing:
                     self.print_invoice(new_filepath)
                 return
-            if testing == True:
-                should_print = False
 
             # Check if not invoice
             if new_filepath == "not_invoice":
-                self.log(f"Marked not an invoice for '{filename}'",
-                         tag="lgreen")
+                new_filepath, should_print, should_save = should_print         
+                if testing == True:
+                    should_print = False
                 if should_print:
                     self.print_invoice(filepath)
-                os.remove(filepath)
-                return
+                if not should_save:
+                    self.log(f"{os.path.basename(new_filepath)} marked not an invoice and not saved", tag="purple")
+                    os.remove(filepath)
+                    return
+                self.log(f"{os.path.basename(new_filepath)} marked not an invoice and saved", tag="purple")
+            
+            if testing == True:
+                should_print = False
 
             # Check if invoice has already been processed
             if os.path.exists(new_filepath):

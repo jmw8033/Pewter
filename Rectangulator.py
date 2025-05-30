@@ -31,6 +31,7 @@ class RectangulatorHandler:
         self.invoice = True
         self.log_file = config.LOG_FILE
         self.should_print = True
+        self.should_save = True
         self.hit_submit = False
         self.root = root
         self.fig = fig
@@ -78,14 +79,20 @@ class RectangulatorHandler:
                 return []
             if not self.invoice:  #  if the user clicked the "Not An Invoice" button
                 self.invoice = True
-                return ["not_invoice", False]
+                if text_box.text:
+                    filename = text_box.text
+                return ["not_invoice", 
+                        [os.path.join(os.path.dirname(filepath), f"{filename}.pdf"), 
+                         self.should_print, 
+                         self.should_save]]
             filename = rectangulator.rename_pdf()
             if filename:  # if the user dragged a rectangle
-                return [filename, self.should_print]
+                return [filename, 
+                        self.should_print]
             elif text_box.text:  # if the user entered a filename
                 return [ 
-                    os.path.join(os.path.dirname(filepath), 
-                    f"{text_box.text}.pdf"), self.should_print]
+                    os.path.join(os.path.dirname(filepath), f"{text_box.text}.pdf"), 
+                    self.should_print]
         except Exception as e:
             self.log(f"An error occurred while rectangulating: {str(e)}",
                      tag="red",
@@ -148,7 +155,7 @@ class RectangulatorHandler:
         self.fig.canvas.draw()
 
         # Create a Not An Invoice button
-        not_inv_button_ax = self.fig.add_axes([0.65, 0.005, 0.18, 0.075])
+        not_inv_button_ax = self.fig.add_axes([0.64, 0.005, 0.18, 0.075])
         not_inv_button = Button(not_inv_button_ax, "Not An Invoice")
 
         def not_invoice(event):  # If the user clicks the "Not Invoice" button
@@ -165,7 +172,7 @@ class RectangulatorHandler:
         not_inv_button.on_clicked(not_invoice)
 
         # Create a checkbox for if it should be printed
-        print_checkbox_ax = self.fig.add_axes([0.9, 0.03, 0.03, 0.03])
+        print_checkbox_ax = self.fig.add_axes([0.86, 0.03, 0.03, 0.03])
         print_checkbox = CheckButtons(print_checkbox_ax, [""], [True])
         def print_callback(label):
             self.should_print = not self.should_print
@@ -196,7 +203,41 @@ class RectangulatorHandler:
                 center_y + rect.get_height() / 4,
                 center_y - rect.get_height() / 4
             ])
-        print_label = self.fig.text(0.89, 0.075, "Print?", fontsize=10)
+        print_label = self.fig.text(0.853, 0.075, "Print?", fontsize=9)
+
+        # Create a checkbox for if it should be saved
+        save_checkbox_ax = self.fig.add_axes([0.93, 0.03, 0.03, 0.03])
+        save_checkbox = CheckButtons(save_checkbox_ax, [""], [True])
+        def save_callback(label):
+            self.should_save = not self.should_save
+        save_checkbox.on_clicked(save_callback)
+        # Set the checkbox to be a square and centered
+        for i, line in enumerate(save_checkbox.lines):
+            rect = save_checkbox.rectangles[i]
+            rect.set_width(1)
+            rect.set_height(1)
+            rect.set_edgecolor("none")
+            # Calculate the center of the rectangle
+            center_x = rect.get_width() / 2
+            center_y = rect.get_height() / 2
+            # Update the line positions to be centered
+            line[0].set_xdata([
+                center_x - rect.get_width() / 4,
+                center_x + rect.get_width() / 4
+            ])
+            line[1].set_xdata([
+                center_x - rect.get_width() / 4,
+                center_x + rect.get_width() / 4
+            ])
+            line[0].set_ydata([
+                center_y - rect.get_height() / 4,
+                center_y + rect.get_height() / 4
+            ])
+            line[1].set_ydata([
+                center_y + rect.get_height() / 4,
+                center_y - rect.get_height() / 4
+            ])
+        save_label = self.fig.text(0.92, 0.075, "Save?", fontsize=9)
 
         # Filename text box and submit button
         text_box_ax = self.fig.add_axes([0.1, 0.005, 0.35, 0.075])
@@ -218,7 +259,6 @@ class RectangulatorHandler:
 
             # run in a separate thread to avoid blocking the main thread
             threading.Thread(target=answer_thread).start()  
-        text_box.on_submit(on_text_submit)
 
         submit_button_ax = self.fig.add_axes([0.45, 0.005, 0.15, 0.075])
         submit_button = Button(submit_button_ax, "Submit")
@@ -232,18 +272,23 @@ class RectangulatorHandler:
             fontsize=10)
         instruction_label = self.fig.text(
             0.1,
-            0.94,
+            0.975,
             "- Draw boxes around Company Name, Date, and Invoice (in that order)",
             fontsize=10)
         instruction_label_2 = self.fig.text(
             0.1,
-            0.92,
+            0.95,
             "- Company Name can be any piece of text unique to that vendor",
             fontsize=10)
         instruction_label_3 = self.fig.text(
             0.1,
-            0.90,
+            0.925,
             "- Right click to verify and save",
+            fontsize=10)
+        instruction_label_4 = self.fig.text(
+            0.1,
+            0.9,
+            "- Print and Save button only apply when pressing Not An Invoice",
             fontsize=10)
 
         self.fig.canvas.draw_idle()
@@ -252,9 +297,9 @@ class RectangulatorHandler:
         root.root.wait_variable(self.done_var)  # wait for the user to finish
 
         # Remove the text labels and rectangles
-        for ax in [text_box_ax, not_inv_button_ax, print_checkbox_ax, submit_button_ax]:
+        for ax in [text_box_ax, not_inv_button_ax, print_checkbox_ax, save_checkbox_ax, submit_button_ax]:
             self.fig.delaxes(ax)
-        for label in [text_box_label, instruction_label, instruction_label_2, instruction_label_3, print_label]:
+        for label in [text_box_label, instruction_label, instruction_label_2, instruction_label_3, instruction_label_4, print_label, save_label]:
             label.remove()
         for cid in rectangulator.cids:
             self.fig.canvas.mpl_disconnect(cid)
