@@ -1,6 +1,13 @@
 import Rectangulator
+import tkinter as tk
+from tkinter import ttk, messagebox
+from datetime import datetime, date
 import threading
+import importlib
 import traceback
+import win32print
+import win32gui
+import win32api
 import imaplib
 import smtplib
 import config
@@ -9,11 +16,6 @@ import queue
 import time
 import sys
 import os
-import tkinter as tk
-from tkinter import ttk
-import win32gui
-import win32print
-import win32api
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from email.mime.text import MIMEText
@@ -36,6 +38,7 @@ class RedirectText:
 class EmailProcessor:
 
     # CONSTANTS
+    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.py")
     ICON_PATH = os.path.join(os.path.dirname(__file__), "Hotpot.ico")
     TEMPLATE_FOLDER = config.TEMPLATE_FOLDER
     INVOICE_FOLDER = config.INVOICE_FOLDER
@@ -65,38 +68,38 @@ class EmailProcessor:
             self.root.title(f"{username.upper()} Pewter")
 
             # Notebook and tabs
-            self.notebook = tk.ttk.Notebook(self.root)
-            self.notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            notebook = ttk.Notebook(self.root)
+            notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
             # Program tab
-            self.program_tab = tk.Frame(self.notebook)
-            self.notebook.add(self.program_tab,
-                              text="Pewter") 
+            program_tab = tk.Frame(notebook)
+            notebook.add(program_tab,
+                        text="Pewter") 
 
             # Layout frames (left for console, right for rectangulator)
-            self.alert_container = tk.Frame(  # container for alert popups
-                self.program_tab,
+            alert_container = tk.Frame(  # container for alert popups
+                program_tab,
                 relief="raised") 
-            self.alert_container.place(
+            alert_container.place(
                 relx=0.5, rely=0.5,
                 anchor=tk.CENTER)  
-            self.alert_container.lower()  # hide initially
-            self.right_frame = tk.Frame(self.program_tab)
-            self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-            self.left_frame = tk.Frame(self.program_tab)
-            self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            alert_container.lower()  # hide initially
+            right_frame = tk.Frame(program_tab)
+            right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+            left_frame = tk.Frame(program_tab)
+            left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
             # GUI BUTTONS
-            self.button_frame = tk.Frame(self.left_frame)  # frame for buttons
-            self.button_frame.pack(side=tk.TOP, fill=tk.X)
+            button_frame = tk.Frame(left_frame)  # frame for buttons
+            button_frame.pack(side=tk.TOP, fill=tk.X, pady=2)
 
             self.start_button = tk.Button( # start process button
-                self.button_frame, text="Start",
+                button_frame, text="Start",
                 command=self.main)  
             self.start_button.pack(side=tk.LEFT, padx=1)
 
             self.pause_button = tk.Button(# pause button
-                self.button_frame,
+                button_frame,
                 text="Pause",
                 command=self.pause_processing,
                 state=tk.DISABLED,
@@ -104,14 +107,14 @@ class EmailProcessor:
             self.pause_button.pack(side=tk.LEFT, padx=1)
 
             self.logout_button = tk.Button(
-                self.button_frame,
+                button_frame,
                 text="Logout",
                 command=self.logout,
                 state=tk.DISABLED)  # logout button
             self.logout_button.pack(side=tk.LEFT, padx=1)
 
             self.errors_button = tk.Button( # resolve errors button
-                self.button_frame,
+                button_frame,
                 text="Resolve Errors",
                 command=self.resolve_errors,
                 state=tk.DISABLED,
@@ -119,7 +122,7 @@ class EmailProcessor:
             self.errors_button.pack(side=tk.LEFT, padx=1)
 
             self.print_errors_button = tk.Button( # resolve unprinted invoices button
-                self.button_frame,
+                button_frame,
                 text="Resolve Prints",
                 command=self.resolve_prints,
                 state=tk.DISABLED,
@@ -127,7 +130,7 @@ class EmailProcessor:
             self.print_errors_button.pack(side=tk.LEFT, padx=1)
 
             self.clear_button = tk.Button( # clear button
-                self.button_frame,
+                button_frame,
                 text="Clear",
                 command=lambda: self.log_text_widget.delete("1.0", tk.END),
                 state=tk.NORMAL,
@@ -135,7 +138,7 @@ class EmailProcessor:
             self.clear_button.pack(side=tk.LEFT, padx=1)
 
             self.testing_button = tk.Button( # testing button
-                self.button_frame,
+                button_frame,
                 text="Testing",
                 command=self.toggle_testing,
                 state=tk.NORMAL,
@@ -145,7 +148,7 @@ class EmailProcessor:
             self.testing_button.pack(side=tk.LEFT, padx=1)
 
             self.away_mode_button = tk.Button( # away mode button
-                self.button_frame,
+                button_frame,
                 text="Away Mode",
                 command=self.toggle_away_mode,
                 state=tk.NORMAL,
@@ -155,7 +158,7 @@ class EmailProcessor:
             self.away_mode_button.pack(side=tk.LEFT, padx=1)
 
             self.test_rectangulator_button = tk.Button( # test rectangulator button
-                self.button_frame,
+                button_frame,
                 text="Test Rectangulator",
                 command=self.test_rectangulator,
                 state=tk.NORMAL,
@@ -163,17 +166,17 @@ class EmailProcessor:
             self.test_rectangulator_button.pack(side=tk.LEFT, padx=1)
 
             self.test_inbox_button = tk.Button( # test inbox button
-                self.button_frame,
+                button_frame,
                 text="Test Inbox",
                 command=self.test_inbox,
                 state=tk.DISABLED,
             )  
             self.test_inbox_button.pack(side=tk.LEFT, padx=1)
 
-            scrollbar = tk.Scrollbar(self.left_frame)  # scrollbar for text box
+            scrollbar = tk.Scrollbar(left_frame)  # scrollbar for text box
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.log_text_widget = tk.Text( # text box for logging
-                self.left_frame,
+                left_frame,
                 yscrollcommand=scrollbar.set,
                 height=30,
                 width=140,
@@ -189,7 +192,7 @@ class EmailProcessor:
             self.ax = self.figure.add_subplot(111)
             self.ax.axis("off")
             self.canvas = FigureCanvasTkAgg(self.figure,
-                                            master=self.right_frame)
+                                            master=right_frame)
             self.canvas.get_tk_widget().pack(side=tk.TOP,
                                              fill=tk.BOTH,
                                              expand=True)
@@ -200,52 +203,78 @@ class EmailProcessor:
                 self, self.figure, self.ax)
 
             # Console tab
-            self.console_tab = tk.Frame(self.notebook)
-            self.notebook.add(self.console_tab,
+            console_tab = tk.Frame(notebook)
+            notebook.add(console_tab,
                               text="Console")
 
             c_scrollbar = tk.Scrollbar(
-                self.console_tab)  # scrollbar for console
+                console_tab)  # scrollbar for console
             c_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            console_text = tk.Text(self.console_tab,
+            console_text = tk.Text(console_tab,
                                    yscrollcommand=scrollbar.set)
             console_text.pack(fill=tk.BOTH, expand=True)
             scrollbar.config(command=console_text.yview)
-            # Redirect stdout and stderr to console
-            sys.stdout = RedirectText(console_text)
-            sys.stderr = RedirectText(console_text)
 
             # Settings tab
-            self.settings_tab = tk.Frame(self.notebook)
-            self.notebook.add(self.settings_tab, text="Settings")
-            self.vars = {
-                "USERNAME": tk.StringVar(value=config.APC_USER),
-                "PASSWORD": tk.StringVar(value=config.APC_PASS),
+            settings_tab = tk.Frame(notebook)
+            notebook.add(settings_tab, text="Settings")
+            vars = {
                 "LOG_FILE": tk.StringVar(value=config.LOG_FILE),
                 "INVOICE_FOLDER": tk.StringVar(value=config.INVOICE_FOLDER),
                 "TEMPLATE_FOLDER": tk.StringVar(value=config.TEMPLATE_FOLDER),
                 "INBOX_CYCLE_TIME": tk.IntVar(value=config.INBOX_CYCLE_TIME),
                 "RECONNECT_TIME": tk.IntVar(value=config.RECONNECT_TIME),
             }
-            for i, (key, var) in enumerate(self.vars.items()):
-                label = tk.Label(self.settings_tab, text=key + ":")
+            for i, (key, var) in enumerate(vars.items()):
+                label = tk.Label(settings_tab, text=key + ":")
                 label.grid(row=i, column=0, padx=5, pady=5, sticky=tk.W)
-                entry = tk.Entry(self.settings_tab, textvariable=var, width=50)
+                entry = tk.Entry(settings_tab, textvariable=var, width=100)
                 entry.grid(row=i, column=1, padx=5, pady=5, sticky=tk.W)
 
+            def save_settings():
+                # Saves settings to config.py
+                try:
+                    lines = []
+                    with open(self.CONFIG_PATH, "r") as f:
+                        for line in f:
+                            for key, var in vars.items():
+                                if line.startswith(key):
+                                    line = f"{key} = {repr(var.get())}\n"
+                            lines.append(line)
+                                    
+                    with open(self.CONFIG_PATH, "w") as f:
+                        f.writelines(lines)
+                    messagebox.showinfo("Settings", "Settings saved successfully.")
+                    importlib.reload(config)  # Reload config module to apply changes
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to save settings: {str(e)}")
+            save_button = tk.Button(settings_tab, 
+                                    text="Save Settings",
+                                    command=save_settings)
+            save_button.grid(row=len(vars), column=0, columnspan=2, pady=10)
+
             # About tab
-            self.about_tab = tk.Frame(self.notebook)
-            self.notebook.add(self.about_tab, text="About")
+            about_tab = tk.Frame(notebook)
+            notebook.add(about_tab, text="About")
             about_text = (
                 "Pewter Email Processor v1.0\n"
             )
             tk.Message(
-                self.about_tab,
+                about_tab,
                 text=about_text,
                 width=500,
                 justify=tk.LEFT,
                 font=("Courier", 11),
             ).pack(padx=10, pady=10)
+
+            # Days without crashing counter with reset button, saves date in config
+            counter_frame = tk.Frame(self.root) 
+            counter_frame.pack(side=tk.RIGHT, padx=2)
+            self.days_without_crashing = tk.StringVar()
+            self.load_crash_counter()
+            self.update_crash_counter_label()
+            tk.Label(counter_frame, textvariable=self.days_without_crashing).pack(side=tk.LEFT)
+            tk.Button(counter_frame, text="↻", command=self.reset_crash_counter, width=2).pack(side=tk.LEFT)
 
             # GUI STYLES
             self.log_text_widget.tag_configure("red", background="#FFCCCC")
@@ -260,6 +289,20 @@ class EmailProcessor:
             self.log_text_widget.tag_configure("no_new_emails", background="#DEDDDD")
             self.log_text_widget.tag_configure("label_error", background="#FFB434")
             self.log_text_widget.tag_configure("default", borderwidth=0.5, relief="solid", lmargin1=10, offset=8)  # applied to all messages
+            
+            # Redirect stdout and stderr to console
+            sys.stdout = RedirectText(console_text)
+            sys.stderr = RedirectText(console_text)
+
+            
+            print("""
+██████╗ ███████╗██╗    ██╗████████╗███████╗██████╗ 
+██╔══██╗██╔════╝██║    ██║╚══██╔══╝██╔════╝██╔══██╗
+██████╔╝█████╗  ██║ █╗ ██║   ██║   █████╗  ██████╔╝
+██╔═══╝ ██╔══╝  ██║███╗██║   ██║   ██╔══╝  ██╔══██╗
+██║     ███████╗╚███╔███╔╝   ██║   ███████╗██║  ██║
+╚═╝     ╚══════╝ ╚══╝╚══╝    ╚═╝   ╚══════╝╚═╝  ╚═╝                                       
+            """)
 
             self.root.protocol(
                 "WM_DELETE_WINDOW",
@@ -347,10 +390,6 @@ class EmailProcessor:
                     f"An error occurred while disconnecting: {str(e)}",
                     tag="red",
                     send_email=True,)
-                self.disconnect(log=False)  # try again after 5 seconds
-            else:
-                # If disconnecting isn't working, were probably already disconnected
-                self.log(f"Disconnecting isn't working: {str(e)}", tag="red")
 
     """ 
     Search inbox loops through emails, creates thread for each email to process it by running process_email.
@@ -885,6 +924,7 @@ class EmailProcessor:
             f"Reconnected to {self.username} - {self.current_time} {self.current_date}",
             tag="green",
             write=False,)
+        self.update_crash_counter_label()
 
     def on_program_exit(self):  # Runs when program is closed, disconnects and closes window
         print("Program closed")
@@ -905,6 +945,39 @@ class EmailProcessor:
         # Code from stack overflow
         hwnd_int = int(self.root.frame(), base=16)
         win32gui.FlashWindow(hwnd_int, 0)
+
+    def load_crash_counter(self): # Sets date variable from config
+        try:
+            last_crash_date = config.LAST_CRASH_DATE.strip()
+            self.last_crash_date = last_crash_date if last_crash_date else str(datetime.now().strftime("%Y-%m-%d"))
+            print(self.last_crash_date)
+        except Exception as e:
+            print(f"No crash date found {str(e)}")
+            self.last_crash_date = str(datetime.now().strftime("%Y-%m-%d"))
+            self.save_crash_counter()
+
+    def save_crash_counter(self): # Overwrites date in config
+        try:
+            lines = []
+            with open(self.CONFIG_PATH, "r") as f:
+                for line in f:
+                    if line.startswith("LAST_CRASH_DATE"):
+                        line = f"LAST_CRASH_DATE = '{self.last_crash_date}'"
+                        print(self.last_crash_date)
+                    lines.append(line)
+            with open(self.CONFIG_PATH, "w") as f:
+                f.writelines(lines)
+            importlib.reload(config)  # Reload config module to apply changes
+        except Exception as e:
+            print(f"what happened {str(e)}")
+
+    def reset_crash_counter(self): # Reset date variable and updates label
+        self.last_crash_date = str(datetime.now().strftime("%Y-%m-%d"))
+        self.save_crash_counter()
+        self.update_crash_counter_label()
+
+    def update_crash_counter_label(self):
+        self.days_without_crashing.set(f"Days without crashing: {(datetime.today() - datetime.strptime(self.last_crash_date, '%Y-%m-%d')).days}")
 
     @property
     def current_time(self):
