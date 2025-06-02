@@ -269,7 +269,7 @@ class EmailProcessor:
 
             # Days without crashing counter with reset button, saves date in config
             counter_frame = tk.Frame(self.root) 
-            counter_frame.pack(side=tk.RIGHT, padx=2)
+            counter_frame.pack(side=tk.RIGHT, padx=1)
             self.days_without_crashing = tk.StringVar()
             self.load_crash_counter()
             self.update_crash_counter_label()
@@ -601,6 +601,10 @@ class EmailProcessor:
             new_filepath, should_print = return_list
             # Check if template used
             if should_print == "template":
+                self.log(
+                    f"Created new invoice file {os.path.basename(new_filepath)}",
+                    tag="lgreen",
+                    display=True)
                 if not testing:
                     self.print_invoice(new_filepath)
                 return

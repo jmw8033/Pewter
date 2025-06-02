@@ -51,10 +51,6 @@ class RectangulatorHandler:
                             display=True)
                     new_filepath = f"{filepath[:-4]}_{str(int(time.time()))}.pdf"
                 os.rename(filepath, new_filepath)
-                self.log(
-                    f"Created new invoice file {os.path.basename(new_filepath)}",
-                    tag="lgreen",
-                    display=True)
                 return [new_filepath, "template"]
 
         # If in away mode, just print and move to away label
@@ -524,12 +520,11 @@ class Rectangulator:
                                                  self.on_key_press)
         self.cids.extend([cid1, cid2, cid3, cid4, cid5])
 
-    def rename_pdf(
-            self):  # Rename the PDF based on extracted text from rectangles
+    def rename_pdf(self):  # Rename the PDF based on extracted text from rectangles
         try:
             if len(self.rectangles) == 3 and all(
-                    self.rectangulator_handler.get_text_in_rect(
-                        rect, self.pdf_path) for rect in self.rectangles):
+                    self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles):
+                self.rectangulator_handler.log(f"Creating new template")
                 self.save_template()
 
                 # Rename the PDF based on extracted text from rectangles in format "MM-DD-YY_INVOICE_NUMBER"
@@ -557,9 +552,10 @@ class Rectangulator:
 
     def save_template(self):  # Save the template to a text file
         # Save the template to a text file as Company Name?x?y?width?height and so on
-        filename = rf"{self.template_folder}\{self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path))}.txt"
+        filename = rf"{self.template_folder}\{self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path))}{str(int(time.time()))}.txt"
         # Check if the file already exists or filename is empty
-        if os.path.exists(filename) or filename == "":
+        if filename == "":
+            self.rectangulator_handler.log(f"Filename empty, not creating template")
             return
         with open(filename, "a") as file:
             for i, coord in enumerate(self.coordinates):
@@ -571,7 +567,7 @@ class Rectangulator:
                     file.write(f"{self.rectangulator_handler.sanitize_filename(rect_text)}?{x}?{y}?{width}?{height}\n")
                 else:
                     file.write(text)
-        self.rectangulator_handler.log(f"Created vendor invoice template {self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path)}")
+        self.rectangulator_handler.log(f"Created invoice template {filename}")
 
     def on_key_press(self, event):  # Handle key press events
         if event.key == "escape":  # reset zoom and position
