@@ -219,11 +219,16 @@ class EmailProcessor:
             settings_tab = tk.Frame(notebook)
             notebook.add(settings_tab, text="Settings")
             vars = {
+                "APC_USER": tk.StringVar(value=config.APC_USER),
+                "APC_PASS": tk.StringVar(value=config.APC_PASS),
                 "LOG_FILE": tk.StringVar(value=config.LOG_FILE),
                 "INVOICE_FOLDER": tk.StringVar(value=config.INVOICE_FOLDER),
                 "TEMPLATE_FOLDER": tk.StringVar(value=config.TEMPLATE_FOLDER),
+                "TEST_INVOICE_FOLDER": tk.StringVar(value=config.TEST_INVOICE_FOLDER),
+                "TEST_TEMPLATE_FOLDER": tk.StringVar(value=config.TEST_TEMPLATE_FOLDER),
                 "INBOX_CYCLE_TIME": tk.IntVar(value=config.INBOX_CYCLE_TIME),
                 "RECONNECT_TIME": tk.IntVar(value=config.RECONNECT_TIME),
+                "RECEIVER_EMAIL": tk.StringVar(value=config.RECEIVER_EMAIL),
             }
             for i, (key, var) in enumerate(vars.items()):
                 label = tk.Label(settings_tab, text=key + ":")
