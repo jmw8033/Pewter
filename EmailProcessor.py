@@ -601,10 +601,7 @@ class EmailProcessor:
             new_filepath, should_print = return_list
             # Check if template used
             if should_print == "template":
-                self.log(
-                    f"Created new invoice file {os.path.basename(new_filepath)}",
-                    tag="lgreen",
-                    display=True)
+                self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {self.current_date} {self.current_time}", tag="lgreen")
                 if not testing:
                     self.print_invoice(new_filepath)
                 return
