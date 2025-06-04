@@ -14,6 +14,7 @@ import config
 import email
 import queue
 import time
+from math import ceil
 import sys
 import os
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -42,7 +43,6 @@ class EmailProcessor:
     ICON_PATH = os.path.join(os.path.dirname(__file__), "Hotpot.ico")
     TEMPLATE_FOLDER = config.TEMPLATE_FOLDER
     INVOICE_FOLDER = config.INVOICE_FOLDER
-    RECONNECT_CYCLE_COUNT = config.RECONNECT_TIME // config.INBOX_CYCLE_TIME
 
     def __init__(self, username, password):
         try:
@@ -315,7 +315,7 @@ class EmailProcessor:
             self.root.after(1000, self.process_queue)  # starts queue processing
             self.root.mainloop()
         except Exception as e:
-            print(f"An error occurred while initializing the EmailProcessor: {str(e)}")
+            print(f"-An error occurred while initializing the EmailProcessor: {str(e)}")
 
     def main(self):  # Runs when start button is pressed
         if self.TESTING:  # set appropriate folders for testing
@@ -360,8 +360,11 @@ class EmailProcessor:
         except imaplib.IMAP4.abort as e:
             self.log(f"Socket error: {str(e)}", tag="red", send_email=False)
             self.restart_processing()
+            raise
         except Exception as e:
             self.log(f"An error occurred: {str(e)}", tag="red", send_email=True)
+            raise 
+
 
     def connect(self, log=True):  # Connects email, returns imap object
         user = f"{self.username}{config.ADDRESS}"
@@ -381,9 +384,9 @@ class EmailProcessor:
                     tag="red",
                     send_email=True,)
 
-    def disconnect(self, log=True):  # Disconnects email
+    def disconnect(self, imap, log=True):  # Disconnects email
         try:
-            self.safe_imap(self.imap.logout)  # safely logout
+            self.safe_imap(imap.logout)  # safely logout
             self.connected = False
             if log:
                 self.log(
@@ -438,12 +441,12 @@ class EmailProcessor:
 
                     cycle_count += 1
                     # Reconnect every hour
-                    if cycle_count == self.RECONNECT_CYCLE_COUNT:
+                    if cycle_count % config.RECONNECT_CYCLE_COUNT == 0:
                         self.reconnect()
                         cycle_count = 0
 
             # Disconnect when the program is closed
-            self.disconnect()
+            self.disconnect(self.imap)
             if self.logging_out:
                 self.logging_out = False
                 self.start_button.config(state=tk.NORMAL)
@@ -499,6 +502,7 @@ class EmailProcessor:
             return
         finally:
             try:
+                print(f"-Disconncting imap for email {mail} - {subject}")
                 imap.logout()
             except:
                 pass
@@ -575,7 +579,7 @@ class EmailProcessor:
         try:
             return_list = self.rectangulator_handler.rectangulate(
                 filename, filepath, self, self.TEMPLATE_FOLDER, testing)
-            print(f"rectangulator returned: {return_list}")
+            print(f"-rectangulator returned: {return_list}")
 
             # Check if Rectangulator fails
             if return_list == [] or return_list[0] == None:
@@ -767,7 +771,7 @@ class EmailProcessor:
                 with open(config.LOG_FILE, "a") as file:
                     file.write(message + "\n")
         except Exception as e:
-            print(f"Error logging: {str(e)}")
+            print(f"-Error logging: {str(e)}")
 
     def check_labels(self, labels, imap):  # Checks for emails that need to be looked at in labels
         # If passed one label, returns email uids, otherwise just logs the number of emails in each label
@@ -878,8 +882,11 @@ class EmailProcessor:
 
     def restart_processing(self):  # Restarts processing
         self.log(f"Restarting...", tag="yellow")
-        self.disconnect()
-        self.processor_thread = None
+        self.disconnect(self.imap)
+        if self.processor_thread:
+            self.pause_event.set()  # pause processing
+            self.processor_thread.join()  # wait for thread to finish
+        self.processor_running = False
         self.main()
 
     def logout(self):  # Logs out
@@ -930,16 +937,15 @@ class EmailProcessor:
         self.move_email(mail, "INBOX", "Test_Email", self.imap)
 
     def reconnect(self):  # Reconnects to email
-        self.disconnect(log=False)
+        self.disconnect(self.imap, log=False)
         self.imap = self.connect(log=False)
         self.log(
             f"Reconnected to {self.username} - {self.current_time} {self.current_date}",
-            tag="green",
-            write=False,)
+            tag="green")
         self.update_crash_counter_label()
 
     def on_program_exit(self):  # Runs when program is closed, disconnects and closes window
-        print("Program closed")
+        print("PROGRAM CLOSED")
         self.log("Disconnecting...", tag="red")
         self.root.update()
         self.window_closed = True
@@ -962,9 +968,8 @@ class EmailProcessor:
         try:
             last_crash_date = config.LAST_CRASH_DATE.strip()
             self.last_crash_date = last_crash_date if last_crash_date else str(datetime.now().strftime("%Y-%m-%d"))
-            print(self.last_crash_date)
         except Exception as e:
-            print(f"No crash date found {str(e)}")
+            print(f"-No crash date found {str(e)}")
             self.last_crash_date = str(datetime.now().strftime("%Y-%m-%d"))
             self.save_crash_counter()
 
@@ -975,13 +980,12 @@ class EmailProcessor:
                 for line in f:
                     if line.startswith("LAST_CRASH_DATE"):
                         line = f"LAST_CRASH_DATE = '{self.last_crash_date}'"
-                        print(self.last_crash_date)
                     lines.append(line)
             with open(self.CONFIG_PATH, "w") as f:
                 f.writelines(lines)
             importlib.reload(config)  # Reload config module to apply changes
         except Exception as e:
-            print(f"what happened {str(e)}")
+            print(f"-what happened {str(e)}")
 
     def reset_crash_counter(self): # Reset date variable and updates label
         self.last_crash_date = str(datetime.now().strftime("%Y-%m-%d"))
