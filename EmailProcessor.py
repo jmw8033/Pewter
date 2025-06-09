@@ -14,7 +14,6 @@ import config
 import email
 import queue
 import time
-from math import ceil
 import sys
 import os
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -173,7 +172,7 @@ class EmailProcessor:
             )  
             self.test_inbox_button.pack(side=tk.LEFT, padx=1)
 
-            scrollbar = tk.Scrollbar(left_frame)  # scrollbar for text box
+            scrollbar = tk.Scrollbar(left_frame)  # scrollbar for log text widget
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.log_text_widget = tk.Text( # text box for logging
                 left_frame,
@@ -211,9 +210,9 @@ class EmailProcessor:
                 console_tab)  # scrollbar for console
             c_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             console_text = tk.Text(console_tab,
-                                   yscrollcommand=scrollbar.set)
+                                   yscrollcommand=c_scrollbar.set)
             console_text.pack(fill=tk.BOTH, expand=True)
-            scrollbar.config(command=console_text.yview)
+            c_scrollbar.config(command=console_text.yview)
 
             # Settings tab
             settings_tab = tk.Frame(notebook)
@@ -358,8 +357,8 @@ class EmailProcessor:
             with self.imap_lock:  # ensure thread-safe access to imap
                 return func(*args, **kwargs)
         except imaplib.IMAP4.abort as e:
-            self.log(f"Socket error: {str(e)}", tag="red", send_email=False)
-            self.restart_processing()
+            self.log(f"Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
+            self.disconnect(self.imap, log=True)
             raise
         except Exception as e:
             self.log(f"An error occurred: {str(e)}", tag="red", send_email=True)
@@ -453,8 +452,8 @@ class EmailProcessor:
                 self.testing_button.config(state=tk.NORMAL)
                 self.away_mode_button.config(state=tk.NORMAL)
         except imaplib.IMAP4.abort as e:
-            self.log(f"Socket error: {str(e)}", tag="red", send_email=False)
-            self.restart_processing()
+            self.log(f"Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
+            self.disconnect(self.imap, log=True)
         except Exception as e:
             self.log(
                 f"An error occurred while searching the inbox: {str(e)} \n{traceback.format_exc()}",
@@ -610,7 +609,7 @@ class EmailProcessor:
             new_filepath, should_print = return_list
             # Check if template used
             if should_print == "template":
-                self.log(f"Created new invoice file {os.path.basename(new_filepath)} - {self.current_date} {self.current_time}", tag="lgreen")
+                self.log(f"Created new invoice file {os.path.basename(new_filepath)} -- {self.current_date} {self.current_time}", tag="lgreen")
                 if not testing:
                     self.print_invoice(new_filepath)
                 return
@@ -623,10 +622,10 @@ class EmailProcessor:
                 if should_print:
                     self.print_invoice(filepath)
                 if not should_save:
-                    self.log(f"{os.path.basename(new_filepath)} marked not an invoice and not saved", tag="purple")
+                    self.log(f"{os.path.basename(new_filepath)} marked not an invoice and not saved -- {self.current_time} {self.current_date}", tag="purple")
                     os.remove(filepath)
                     return
-                self.log(f"{os.path.basename(new_filepath)} marked not an invoice and saved", tag="purple")
+                self.log(f"{os.path.basename(new_filepath)} marked not an invoice and saved -- {self.current_time} {self.current_date}", tag="purple")
             
             if testing == True:
                 should_print = False
@@ -635,14 +634,14 @@ class EmailProcessor:
             if os.path.exists(new_filepath):
                 old_filepath = new_filepath
                 self.log(
-                    f"New invoice file already exists at {os.path.basename(old_filepath)}",
+                    f"New invoice file already exists at {os.path.basename(old_filepath)} -- {self.current_time} {self.current_date}",
                     tag="orange")
                 new_filepath = f"{old_filepath[:-4]}_{str(int(time.time()))}.pdf"
 
             # Save invoice
             os.rename(filepath, new_filepath)
             self.log(
-                f"Created new invoice file {os.path.basename(new_filepath)} - {self.current_date} {self.current_time}",
+                f"Created new invoice file {os.path.basename(new_filepath)} -- {self.current_date} {self.current_time}",
                 tag="lgreen")
             if should_print:
                 self.print_invoice(new_filepath)
@@ -940,7 +939,7 @@ class EmailProcessor:
         self.disconnect(self.imap, log=False)
         self.imap = self.connect(log=False)
         self.log(
-            f"Reconnected to {self.username} - {self.current_time} {self.current_date}",
+            f"Reconnected to {self.username} -- {self.current_time} {self.current_date}",
             tag="green")
         self.update_crash_counter_label()
 
