@@ -10,6 +10,7 @@ import win32gui
 import win32api
 import imaplib
 import smtplib
+import sqlite3
 import config
 import email
 import queue
@@ -42,6 +43,7 @@ class EmailProcessor:
     ICON_PATH = os.path.join(os.path.dirname(__file__), "Hotpot.ico")
     TEMPLATE_FOLDER = config.TEMPLATE_FOLDER
     INVOICE_FOLDER = config.INVOICE_FOLDER
+    ARCHIVE_DB = os.path.join(os.path.dirname(__file__), "archive.db")
 
     def __init__(self, username, password):
         try:
@@ -65,6 +67,8 @@ class EmailProcessor:
             self.root.iconbitmap(self.ICON_PATH)
             self.root.geometry("1400x700")
             self.root.title(f"{username.upper()} Pewter")
+            style = ttk.Style(self.root)
+            style.theme_use("clam")
 
             # Notebook and tabs
             notebook = ttk.Notebook(self.root)
@@ -72,26 +76,21 @@ class EmailProcessor:
 
             # Program tab
             program_tab = tk.Frame(notebook)
-            notebook.add(program_tab,
-                        text="Pewter") 
+            notebook.add(program_tab, text="Pewter") 
 
             # Layout frames (left for console, right for rectangulator)
-            self.alert_container = tk.Frame(  # container for alert popups
-                program_tab,
-                relief="raised") 
-            self.alert_container.place(
-                relx=0.5, rely=0.5,
-                anchor=tk.CENTER)  
+            self.alert_container = tk.Frame(program_tab, relief="raised") # container for alert popup
+            self.alert_container.place(relx=0.5, rely=0.5, anchor=tk.CENTER)  
             self.alert_container.lower()  # hide initially
             right_frame = tk.Frame(program_tab)
             right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
             left_frame = tk.Frame(program_tab)
             left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-            # GUI BUTTONS
+            # Button Frame
             button_frame = tk.Frame(left_frame)  # frame for buttons
             button_frame.pack(side=tk.TOP, fill=tk.X, pady=2)
-
+            # GUI Buttons
             self.start_button = tk.Button( # start process button
                 button_frame, text="Start",
                 command=self.main)  
@@ -172,6 +171,39 @@ class EmailProcessor:
             )  
             self.test_inbox_button.pack(side=tk.LEFT, padx=1)
 
+
+            # Inbox / Log Frames (Left Frame)
+            # Inbox Frame
+            inbox_frame = tk.Frame(left_frame)  # frame for inbox treeview
+            inbox_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            self.inbox = ttk.Treeview(inbox_frame,
+                                      columns=("Subject", "Date", "Invoice", "Saved", "Printed", "Errors", "Filepath"),
+                                      show="headings",
+                                      height=15)
+            self.inbox.column("Subject", width=150, anchor="center")
+            self.inbox.column("Date", width=50, anchor="center")
+            self.inbox.column("Invoice", width=100, anchor="center")
+            self.inbox.column("Saved", width=30, anchor="center")
+            self.inbox.column("Printed", width=30, anchor="center")
+            self.inbox.column("Errors", width=60, anchor="center")
+            self.inbox.column("Filepath", width=0, stretch=False)
+            self.inbox.heading("Subject", text="Subject")
+            self.inbox.heading("Date", text="Date")
+            self.inbox.heading("Invoice", text="Invoice #")
+            self.inbox.heading("Saved", text="Saved")
+            self.inbox.heading("Printed", text="Printed")
+            self.inbox.heading("Errors", text="Errors")
+            self.inbox.heading("Filepath", text="")
+            self.inbox.pack(fill=tk.BOTH, expand=True)
+            self.inbox.bind("<Double-1>", self.remove_inbox_item)  # double click to remove inbox item
+            self.inbox.tag_configure("pending", background="#FBFF1D")  # style for pending items
+            self.inbox.tag_configure("finished", background="#68FF43")  # style for default items
+            self.inbox.tag_configure("error", background="#FD4848")  # style for label errors
+            
+            # Log Frame
+            log_frame = tk.Frame(left_frame)  # frame for log text widget
+            log_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
+
             scrollbar = tk.Scrollbar(left_frame)  # scrollbar for log text widget
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.log_text_widget = tk.Text( # text box for logging
@@ -186,8 +218,9 @@ class EmailProcessor:
             self.log_text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             scrollbar.configure(command=self.log_text_widget.yview)
 
+
             # Plot canvas for rectangulator
-            self.figure = Figure(figsize=(7, 6), dpi=100)
+            self.figure = Figure(figsize=(7.47, 6), dpi=100)
             self.ax = self.figure.add_subplot(111)
             self.ax.axis("off")
             self.canvas = FigureCanvasTkAgg(self.figure,
@@ -196,23 +229,63 @@ class EmailProcessor:
                                              fill=tk.BOTH,
                                              expand=True)
 
-            self.gui_queue = queue.Queue()  # queue for all gui tasks
+            self.gui_queue = queue.PriorityQueue()  # queue for all gui tasks
             self.gui_busy = False
             self.rectangulator_handler = Rectangulator.RectangulatorHandler(
                 self, self.figure, self.ax)
 
+
+            # Archive tab
+            archive_tab = tk.Frame(notebook)
+            notebook.add(archive_tab, text="Archive")
+            self.archive = ttk.Treeview(archive_tab,
+                                        columns=("Subject", "Date", "Invoice", "Saved", "Printed", "Errors", "Filepath"),
+                                        show="headings",
+                                        height=15)
+            self.archive.column("Subject", width=100, anchor="center")
+            self.archive.column("Date", width=50, anchor="center")
+            self.archive.column("Invoice", width=100, anchor="center")
+            self.archive.column("Saved", width=50, anchor="center")
+            self.archive.column("Printed", width=50, anchor="center")
+            self.archive.column("Errors", width=100, anchor="center")
+            self.archive.column("Filepath", width=300, anchor="center")
+            self.archive.heading("Subject", text="Subject")
+            self.archive.heading("Date", text="Date")
+            self.archive.heading("Invoice", text="Invoice")
+            self.archive.heading("Saved", text="Saved")
+            self.archive.heading("Printed", text="Printed")
+            self.archive.heading("Errors", text="Errors")
+            self.archive.heading("Filepath", text="Filepath")
+            self.archive.bind("<Double-1>", self.open_archive_item)  # double click to open archive item
+            self.archive.bind("<Double-Button-3>", self.remove_archive_item)  # right click to remove archive item
+            self.archive.pack(fill=tk.BOTH, expand=True)
+
+            # Load archive from database
+            self.db = sqlite3.connect(self.ARCHIVE_DB)
+            self.db.execute("""CREATE TABLE IF NOT EXISTS archive (
+                     id       TEXT PRIMARY KEY,
+                     subject  TEXT,
+                     datestamp TEXT,
+                     invoice  TEXT,
+                     saved    TEXT,
+                     printed  TEXT,
+                     errors   TEXT,
+                     filepath TEXT
+                   )""")
+            self.db.commit()
+            self.load_archive()  # Load archive from database
+            
+
             # Console tab
             console_tab = tk.Frame(notebook)
-            notebook.add(console_tab,
-                              text="Console")
+            notebook.add(console_tab, text="Console")
 
-            c_scrollbar = tk.Scrollbar(
-                console_tab)  # scrollbar for console
+            c_scrollbar = tk.Scrollbar(console_tab)  # scrollbar for console
             c_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            console_text = tk.Text(console_tab,
-                                   yscrollcommand=c_scrollbar.set)
+            console_text = tk.Text(console_tab, yscrollcommand=c_scrollbar.set)
             console_text.pack(fill=tk.BOTH, expand=True)
             c_scrollbar.config(command=console_text.yview)
+
 
             # Settings tab
             settings_tab = tk.Frame(notebook)
@@ -358,12 +431,10 @@ class EmailProcessor:
                 return func(*args, **kwargs)
         except imaplib.IMAP4.abort as e:
             self.log(f"Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
-            self.disconnect(self.imap, log=True)
             raise
         except Exception as e:
             self.log(f"An error occurred: {str(e)}", tag="red", send_email=True)
             raise 
-
 
     def connect(self, log=True):  # Connects email, returns imap object
         user = f"{self.username}{config.ADDRESS}"
@@ -429,7 +500,7 @@ class EmailProcessor:
                             f"No new emails - {self.current_time} {self.current_date}",
                             tag="no_new_emails",
                             write=False)
-                        self.check_labels(["Need_Print", "Need_Login", "Errors"], self.imap)
+                        self.check_labels(["Need_Print", "Errors"], self.imap)
                         self.pause_event.wait(timeout=config.INBOX_CYCLE_TIME)  # pause until next cycle
                     else:
                         for uid in new_uids:
@@ -453,7 +524,6 @@ class EmailProcessor:
                 self.away_mode_button.config(state=tk.NORMAL)
         except imaplib.IMAP4.abort as e:
             self.log(f"Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
-            self.disconnect(self.imap, log=True)
         except Exception as e:
             self.log(
                 f"An error occurred while searching the inbox: {str(e)} \n{traceback.format_exc()}",
@@ -491,7 +561,7 @@ class EmailProcessor:
             else:
                 with self.current_emails_lock:
                     self.current_emails.add(mail)
-                self.handle_attachments(mail, imap)
+                self.handle_attachments(mail, imap, subject)
         except Exception as e:
             self.log(
                 f"An error occurred while processing an email: {str(e)} \n{traceback.format_exc()}",
@@ -506,7 +576,7 @@ class EmailProcessor:
             except:
                 pass
 
-    def handle_attachments(self, mail, imap):  # Iterate over email parts and find pdf, ran by process_email
+    def handle_attachments(self, mail, imap, subject):  # Iterate over email parts and find pdf, ran by process_email
         msg = self.get_msg(mail, "INBOX", imap)
         if msg is None:
             self.log(
@@ -514,7 +584,6 @@ class EmailProcessor:
                 tag="red",
                 send_email=True)
             return
-        subject = msg["Subject"]
         filenames = []
 
         for part in msg.walk():
@@ -524,16 +593,16 @@ class EmailProcessor:
                     and part.get_filename().lower().endswith(".pdf")):
                 filenames.append(part.get_filename())
                 if subject == "Test":
-                    self.add_to_queue(mail, part, testing="test")
+                    self.add_to_queue(mail, part, subject, testing="test")
                 elif self.TESTING:
-                    self.add_to_queue(mail, part, testing=True)
+                    self.add_to_queue(mail, part, subject, testing=True)
                 else:
-                    self.add_to_queue(mail, part)
+                    self.add_to_queue(mail, part, subject)
         self.remaining_pdfs[mail] = len(filenames)
         self.log(f"Processing {len(filenames)} PDF(s) for email '{subject}'",
                  tag="blue")
 
-    def add_to_queue(self, mail, part, testing=False):  # Adds invoices to queue, ran by handle_attachments
+    def add_to_queue(self, mail, part, subject, testing=False):  # Adds invoices to queue, ran by handle_attachments
         try:
             # Get fllename and attachment
             filename = part.get_filename()
@@ -551,7 +620,8 @@ class EmailProcessor:
             with open(filepath, "wb") as file:
                 file.write(attachment)
 
-            self.gui_queue.put(("rectangulate", mail, filename, filepath, testing))  # add to queue for rectangulator
+            self.gui_queue.put((1, "NEW", mail, subject, filename, filepath))
+            self.gui_queue.put((2, "RECTANGULATE", mail, filename, filepath, testing))  # add to queue for rectangulator
         except Exception as e:
             self.log(
                 f"An error occurred while processing the queue: {str(e)}",
@@ -562,8 +632,40 @@ class EmailProcessor:
         try:
             # Check if any gui tasks are in the queue
             if not self.gui_queue.empty() and not self.gui_busy:
-                task = self.gui_queue.get_nowait()
-                if task[0] == "rectangulate":
+                task = self.gui_queue.get()[1:]  # Unpack the task, ignore priority
+                task_type = task[0]
+                if task_type == "NEW":
+                    mail, subject, filename, filepath = task[1:5]
+                    self.inbox.insert(
+                        "", "end",
+                        iid=f"{mail}_{filename}",
+                        values=(subject, self.current_date, filename, "No", "No", "", filepath), # Invoice, Saved, Printed, Errors
+                        tags=("pending",))
+                    
+                if task_type == "STATUS":
+                    id, status = task[1:3]
+                    item = self.inbox.item(id)
+                    values = list(item["values"])
+
+                    if status == "saved":
+                        filename, filepath = task[3:5]
+                        values[2] = filename
+                        values[6] = filepath
+                        values[3] = "Yes"
+                        self.inbox.item(id, tags=("finished",))
+                    elif status == "printed":
+                        values[4] = "Yes"
+                    elif status.startswith("Error"):
+                        values[5] = status
+                        self.inbox.item(id, tags=("error",))
+                    self.inbox.item(id, values=values)
+
+                if task_type == "REMOVE":
+                    id = task[1]
+                    if id in self.inbox.get_children():
+                        self.inbox.delete(id)
+
+                if task_type == "RECTANGULATE":
                     self.gui_busy = True
                     # Unpack the task
                     mail, filename, filepath, testing = task[1:6]
@@ -572,10 +674,11 @@ class EmailProcessor:
                         lambda: self.handle_rectangulator(
                             mail, filename, filepath, testing),)  
         finally:
-            self.root.after(1000, self.process_queue)  # Schedule the next check of the queue
+            self.root.after(100, self.process_queue)  # Schedule the next check of the queue
 
     def handle_rectangulator(self, mail, filename, filepath, testing):  # Handles rectangulator
         try:
+            inbox_item_id = f"{mail}_{filename}"
             return_list = self.rectangulator_handler.rectangulate(
                 filename, filepath, self, self.TEMPLATE_FOLDER, testing)
             print(f"-rectangulator returned: {return_list}")
@@ -588,6 +691,7 @@ class EmailProcessor:
                     f"Failed to download '{filename}', moved to Error label, not printed",
                     tag="red",
                     send_email=True)
+                self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Rectangulating"))
                 return
 
             # Check if test email
@@ -597,6 +701,7 @@ class EmailProcessor:
                     tag="purple")
                 self.move_email(mail, "Test_Email", "INBOX", self.imap)
                 os.remove(filepath)
+                self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Test Email", "None"))
                 return
 
             # Check if email is already processed
@@ -611,20 +716,23 @@ class EmailProcessor:
             if should_print == "template":
                 self.log(f"Created new invoice file {os.path.basename(new_filepath)} -- {self.current_date} {self.current_time}", tag="lgreen")
                 if not testing:
-                    self.print_invoice(new_filepath)
+                    self.print_invoice(inbox_item_id, new_filepath)
+                self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", os.path.basename(new_filepath), new_filepath))
                 return
 
             # Check if not invoice
             if new_filepath == "not_invoice":
-                new_filepath, should_print, should_save = should_print         
+                new_filepath, should_print, should_save = should_print    
                 if testing == True:
                     should_print = False
                 if should_print:
-                    self.print_invoice(filepath)
+                    self.print_invoice(inbox_item_id, filepath)
                 if not should_save:
                     self.log(f"{os.path.basename(new_filepath)} marked not an invoice and not saved -- {self.current_time} {self.current_date}", tag="purple")
                     os.remove(filepath)
+                    self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Not Invoice", "None"))     
                     return
+                self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Not Invoice", new_filepath))
                 self.log(f"{os.path.basename(new_filepath)} marked not an invoice and saved -- {self.current_time} {self.current_date}", tag="purple")
             
             if testing == True:
@@ -640,14 +748,73 @@ class EmailProcessor:
 
             # Save invoice
             os.rename(filepath, new_filepath)
+            self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", os.path.basename(new_filepath), new_filepath))
             self.log(
                 f"Created new invoice file {os.path.basename(new_filepath)} -- {self.current_date} {self.current_time}",
                 tag="lgreen")
             if should_print:
-                self.print_invoice(new_filepath)
+                self.print_invoice(inbox_item_id, new_filepath)
         finally:
             self.gui_busy = False
 
+    def remove_inbox_item(self, event):  # Removes inbox item on double click and adds to archive
+        # Only if item has finished tag
+        item = self.inbox.selection()  # Get selected item
+        if not item or "finished" not in self.inbox.item(item[0], "tags"):
+            return
+        
+        id = item[0]
+        values = self.inbox.item(id, "values")  # Get values of selected item
+        new_id = f"{id}_{int(time.time())}" # create new unique id for archive item
+
+        if values[2] == "Test Email":  # If item is test email, don't archive
+            self.inbox.delete(id)
+            return
+        
+        self.archive.insert(
+            "", "end",
+            iid=new_id,
+            values=(values[0], values[1], values[2], values[3], values[4], values[5], values[6]),
+            tags=("default",))
+        self.save_archive((new_id, values[0], values[1], values[2], values[3], values[4], values[5], values[6]))  # Save to archive
+        self.inbox.delete(id)  # Remove item from inbox
+
+    def remove_archive_item(self, event):  # Removes archive item on double right click
+        item = self.archive.selection()  # Get selected item
+        if not item:
+            return
+        
+        id = item[0]
+        self.archive.delete(id)  # Remove item from archive tree
+        self.db.execute("DELETE FROM archive WHERE id = ?", (id,))  # Remove from database
+        self.db.commit() 
+        self.log(f"Removed archive item {id} from archive.", tag="blue")  # Log removal
+
+    def save_archive(self, record):
+        self.db.execute("INSERT OR REPLACE INTO archive VALUES (?, ?, ?, ?, ?, ?, ?, ?)", record)
+        self.db.commit()
+
+    def load_archive(self):  # Loads archive from database
+        for row in self.db.execute("SELECT * FROM archive ORDER BY datestamp DESC"):
+            self.archive.insert("", "end", iid=row[0], values=row[1:])
+
+    def open_archive_item(self, event):  # Opens archive item on double click
+        item = self.archive.selection()
+        if not item:
+            return
+        id = item[0]
+        filepath = self.archive.item(id, "values")[-1]  # Get filepath from selected item
+        if not filepath or not os.path.exists(filepath):
+            self.log(f"File not found for archive item {id}: {filepath}",
+                     tag="red",
+                     send_email=True)
+            return
+        try:
+            os.startfile(filepath)  # Open the file
+        except Exception as e:
+            self.log(f"Error opening file {filepath}: {str(e)}",
+                     tag="red",)
+            
     def move_email(self, mail, label, og_label, imap):  # Moves email to label
         subject = "Unknown"
         try:
@@ -730,17 +897,19 @@ class EmailProcessor:
         except Exception as e:
             return None
 
-    def print_invoice(self, filepath):  # Printer
+    def print_invoice(self, inbox_item_id, filepath):  # Printer
         try:
             # Get default printer and print
             p = win32print.GetDefaultPrinter()
             win32api.ShellExecute(0, "print", filepath, None, ".", 0)
             self.log(f"Printed {os.path.basename(filepath)}.", tag="lgreen")
+            self.gui_queue.put((0, "STATUS", inbox_item_id, "printed"))
             return True
         except Exception as e:
             self.log(f"Printing failed for {filepath}: {str(e)}",
                      tag="red",
                      send_email=True)
+            self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Printing"))
             return False
 
     def log(self, *args, tag=None, send_email=False, write=True):  # Logs to text box and log file

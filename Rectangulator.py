@@ -264,7 +264,7 @@ class RectangulatorHandler:
         text_box_label = self.fig.text(
             0.1,
             0.089,
-            "Enter Filename (mm-dd-yy_invoice#)",
+            "Enter Filename Manually (mm-dd-yy_invoice#)",
             fontsize=10)
         instruction_label = self.fig.text(
             0.1,
