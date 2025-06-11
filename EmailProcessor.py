@@ -171,6 +171,14 @@ class EmailProcessor:
             )  
             self.test_inbox_button.pack(side=tk.LEFT, padx=1)
 
+            self.archive_all_button = tk.Button( # archive all button
+                button_frame,
+                text="Archive All",
+                command=self.archive_all,
+                state=tk.NORMAL,
+            )
+            self.archive_all_button.pack(side=tk.LEFT, padx=1)
+
 
             # Inbox / Log Frames (Left Frame)
             # Inbox Frame
@@ -220,7 +228,7 @@ class EmailProcessor:
 
 
             # Plot canvas for rectangulator
-            self.figure = Figure(figsize=(7.47, 6), dpi=100)
+            self.figure = Figure(figsize=(6.75, 6), dpi=100)
             self.ax = self.figure.add_subplot(111)
             self.ax.axis("off")
             self.canvas = FigureCanvasTkAgg(self.figure,
@@ -778,6 +786,7 @@ class EmailProcessor:
             tags=("default",))
         self.save_archive((new_id, values[0], values[1], values[2], values[3], values[4], values[5], values[6]))  # Save to archive
         self.inbox.delete(id)  # Remove item from inbox
+        self.log(f"Archived inbox item {id} as {new_id}.", tag="blue")
 
     def remove_archive_item(self, event):  # Removes archive item on double right click
         item = self.archive.selection()  # Get selected item
@@ -789,6 +798,11 @@ class EmailProcessor:
         self.db.execute("DELETE FROM archive WHERE id = ?", (id,))  # Remove from database
         self.db.commit() 
         self.log(f"Removed archive item {id} from archive.", tag="blue")  # Log removal
+
+    def archive_all(self):  # Archives all inbox items
+        for item in self.inbox.get_children(): # select item and call remove
+            self.inbox.selection_set(item)  # Select item
+            self.remove_inbox_item(None)  # Call remove inbox item method
 
     def save_archive(self, record):
         self.db.execute("INSERT OR REPLACE INTO archive VALUES (?, ?, ?, ?, ?, ?, ?, ?)", record)
