@@ -1,7 +1,7 @@
 import Rectangulator
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, date
+from datetime import datetime
 import threading
 import importlib
 import traceback
@@ -439,6 +439,7 @@ class EmailProcessor:
                 return func(*args, **kwargs)
         except imaplib.IMAP4.abort as e:
             self.log(f"Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
+            self.logout()
             raise
         except Exception as e:
             self.log(f"An error occurred: {str(e)}", tag="red", send_email=True)
@@ -532,6 +533,7 @@ class EmailProcessor:
                 self.away_mode_button.config(state=tk.NORMAL)
         except imaplib.IMAP4.abort as e:
             self.log(f"Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
+            self.logout()
         except Exception as e:
             self.log(
                 f"An error occurred while searching the inbox: {str(e)} \n{traceback.format_exc()}",
