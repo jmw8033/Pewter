@@ -449,6 +449,7 @@ class EmailProcessor:
         user = f"{self.username}{config.ADDRESS}"
         try:
             imap = imaplib.IMAP4_SSL(config.IMAP_SERVER)
+            imap.socket().settimeout(10)
             imap.login(user, self.password)
             self.connected = True
             if log:
@@ -1075,9 +1076,11 @@ class EmailProcessor:
 
     def logout(self):  # Logs out
         self.log("Logging out...", tag="yellow")
+        self.start_button.config(state=tk.NORMAL)
         self.pause_button.config(state=tk.DISABLED)
-        self.errors_button.config(state=tk.DISABLED)
         self.logout_button.config(state=tk.DISABLED)
+        self.errors_button.config(state=tk.DISABLED)
+        self.print_errors_button.config(state=tk.DISABLED)
         self.test_inbox_button.config(state=tk.DISABLED)
         self.pause_event.set()
         self.processor_running = False
@@ -1129,16 +1132,15 @@ class EmailProcessor:
         self.update_crash_counter_label()
 
     def on_program_exit(self):  # Runs when program is closed, disconnects and closes window
-        print("PROGRAM CLOSED")
         self.log("Disconnecting...", tag="red")
-        self.root.update()
         self.window_closed = True
+        self.save_crash_counter()  # Save crash counter before closing
 
         # Disconnect imaps if running
         if self.processor_thread:
             self.processor_running = False
             self.pause_event.set()
-            self.processor_thread.join()
+            self.processor_thread.join(timeout=1)  # Wait for thread to finish
 
         # Destroys tkinter window
         self.root.destroy()
