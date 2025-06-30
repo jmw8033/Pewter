@@ -265,7 +265,8 @@ class EmailProcessor:
             self.archive.heading("Errors", text="Errors")
             self.archive.heading("Filepath", text="Filepath")
             self.archive.bind("<Double-1>", self.open_archive_item)  # double click to open archive item
-            self.archive.bind("<Double-Button-3>", self.remove_archive_item)  # right click to remove archive item
+            self.archive.bind("<Double-Button-3>", self.remove_archive_item)  # double right click to remove archive item
+            self.archive.bind("<Button-2>", self.print_archive_item) # middle click to print archive item
             self.archive.pack(fill=tk.BOTH, expand=True)
 
             # Load archive from database
@@ -727,7 +728,7 @@ class EmailProcessor:
             if should_print == "template":
                 self.log(f"Created new invoice file {os.path.basename(new_filepath)} -- {self.current_date} {self.current_time}", tag="lgreen")
                 if not testing:
-                    self.print_invoice(inbox_item_id, new_filepath)
+                    self.print_invoice(new_filepath, inbox_item_id)
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", os.path.basename(new_filepath), new_filepath))
                 return
 
@@ -737,7 +738,7 @@ class EmailProcessor:
                 if testing == True:
                     should_print = False
                 if should_print:
-                    self.print_invoice(inbox_item_id, filepath)
+                    self.print_invoice(filepath, inbox_item_id)
                 if not should_save:
                     self.log(f"{os.path.basename(new_filepath)} marked not an invoice and not saved -- {self.current_time} {self.current_date}", tag="purple")
                     os.remove(filepath)
@@ -764,7 +765,7 @@ class EmailProcessor:
                 f"Created new invoice file {os.path.basename(new_filepath)} -- {self.current_date} {self.current_time}",
                 tag="lgreen")
             if should_print:
-                self.print_invoice(inbox_item_id, new_filepath)
+                self.print_invoice(new_filepath, inbox_item_id)
         finally:
             self.gui_busy = False
 
@@ -801,6 +802,22 @@ class EmailProcessor:
         self.db.execute("DELETE FROM archive WHERE id = ?", (id,))  # Remove from database
         self.db.commit() 
         self.log(f"Removed archive item {id} from archive.", tag="blue")  # Log removal
+
+    def print_archive_item(self, event): # Prints archive item on middle click
+        item = self.archive.selection()
+        if not item:
+            return
+        
+        id = item[0]
+        filepath = self.archive.item(id, "values")[-1]
+        if not filepath or not os.path.exists(filepath):
+            self.log(f"File not found for printing archive item {id}, {filepath}", tag="red")
+            return
+        try:
+            self.print_invoice(filepath)
+        except Exception as e:
+            self.log(f"Error printing archive item {id}: {str(e)}", tag="red")
+
 
     def archive_all(self):  # Archives all inbox items
         for item in self.inbox.get_children(): # select item and call remove
@@ -914,19 +931,21 @@ class EmailProcessor:
         except Exception as e:
             return None
 
-    def print_invoice(self, inbox_item_id, filepath):  # Printer
+    def print_invoice(self, filepath, inbox_item_id=None):  # Printer
         try:
             # Get default printer and print
             p = win32print.GetDefaultPrinter()
             win32api.ShellExecute(0, "print", filepath, None, ".", 0)
             self.log(f"Printed {os.path.basename(filepath)}.", tag="lgreen")
-            self.gui_queue.put((0, "STATUS", inbox_item_id, "printed"))
+            if inbox_item_id:
+                self.gui_queue.put((0, "STATUS", inbox_item_id, "printed"))
             return True
         except Exception as e:
             self.log(f"Printing failed for {filepath}: {str(e)}",
                      tag="red",
                      send_email=True)
-            self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Printing"))
+            if inbox_item_id:
+                self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Printing"))
             return False
 
     def log(self, *args, tag=None, send_email=False, write=True):  # Logs to text box and log file
