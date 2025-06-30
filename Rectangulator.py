@@ -137,6 +137,12 @@ class RectangulatorHandler:
                 pass
 
     def open_rectangulator(self, pdf_path, template_folder, root):  # Setup the page for the Rectangulator and return the Rectangulator and textbox
+        # Reset flags
+        self.should_print = True 
+        self.should_save = True
+        self.hit_submit = False
+        self.invoice = True
+
         self.done_var.set(0)  # reset done variable
         doc = fitz.open(pdf_path)
         page = doc[0]

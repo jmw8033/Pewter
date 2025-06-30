@@ -981,6 +981,8 @@ class EmailProcessor:
                     f"An error occurred while checking the label: {str(e)}",
                     tag="red",
                     send_email=True)
+                raise imaplib.IMAP4.abort
+            
 
     def get_msg(self, mail, label, imap):  # Gets email message
         try:
