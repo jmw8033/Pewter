@@ -534,7 +534,7 @@ class EmailProcessor:
                 self.testing_button.config(state=tk.NORMAL)
                 self.away_mode_button.config(state=tk.NORMAL)
         except imaplib.IMAP4.abort as e:
-            self.log(f"Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
+            self.log(f"Search Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
             self.logout()
         except Exception as e:
             self.log(
@@ -1001,7 +1001,6 @@ class EmailProcessor:
                     tag="red",
                     send_email=True)
                 raise imaplib.IMAP4.abort
-            
 
     def get_msg(self, mail, label, imap):  # Gets email message
         try:
@@ -1095,7 +1094,7 @@ class EmailProcessor:
         self.processor_running = False
         self.main()
 
-    def logout(self):  # Logs out
+    def logout(self, reconnect=False):  # Logs out
         self.log("Logging out...", tag="yellow")
         self.start_button.config(state=tk.NORMAL)
         self.pause_button.config(state=tk.DISABLED)
@@ -1107,6 +1106,11 @@ class EmailProcessor:
         self.processor_running = False
         self.logging_out = True
         self.current_emails.clear()  # clear current emails
+
+        if reconnect:
+            # wait a few seconds then reconnect
+            time.sleep(5)
+            self.reconnect()
 
     def toggle_testing(self):  # Toggles testing mode
         if self.TESTING:
@@ -1155,7 +1159,8 @@ class EmailProcessor:
     def on_program_exit(self):  # Runs when program is closed, disconnects and closes window
         self.log("Disconnecting...", tag="red")
         self.window_closed = True
-        self.save_crash_counter()  # Save crash counter before closing
+        self.save_crash_counter()
+        self.archive_all()  # Archive all inbox items
 
         # Disconnect imaps if running
         if self.processor_thread:
