@@ -2,6 +2,7 @@ import Rectangulator
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
+from math import ceil
 import threading
 import importlib
 import traceback
@@ -9,20 +10,24 @@ import win32print
 import win32gui
 import win32api
 import socket
+import json
 import ssl
 import imaplib
 import smtplib
 import sqlite3
-import config
 import email
 import queue
 import time
 import sys
 import os
+import re
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+with open(os.path.join(os.path.dirname(__file__), "config.json")) as f:
+    config = json.load(f)
 
 
 class RedirectText:
@@ -41,16 +46,17 @@ class RedirectText:
 class EmailProcessor:
 
     # CONSTANTS
-    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.py")
+    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
     ICON_PATH = os.path.join(os.path.dirname(__file__), "Hotpot.ico")
-    TEMPLATE_FOLDER = config.TEMPLATE_FOLDER
-    INVOICE_FOLDER = config.INVOICE_FOLDER
+    TEMPLATE_FOLDER = config["TEMPLATE_FOLDER"]
+    INVOICE_FOLDER = config["INVOICE_FOLDER"]
+    EMAIL_ENDING = config["EMAIL_ENDING"]
     ARCHIVE_DB = os.path.join(os.path.dirname(__file__), "archive.db")
 
     def __init__(self, username, password):
         try:
             # VARIABLES
-            socket.setdefaulttimeout(10)  # set default socket timeout
+            socket.setdefaulttimeout(100)  # set default socket timeout
             self.username = username
             self.password = password
             self.window_closed = None
@@ -298,20 +304,21 @@ class EmailProcessor:
             # Settings tab
             settings_tab = tk.Frame(notebook)
             notebook.add(settings_tab, text="Settings")
-            vars = {
-                "APC_USER": tk.StringVar(value=config.APC_USER),
-                "APC_PASS": tk.StringVar(value=config.APC_PASS),
-                "LOG_FILE": tk.StringVar(value=config.LOG_FILE),
-                "INVOICE_FOLDER": tk.StringVar(value=config.INVOICE_FOLDER),
-                "TEMPLATE_FOLDER": tk.StringVar(value=config.TEMPLATE_FOLDER),
-                "TEST_INVOICE_FOLDER": tk.StringVar(value=config.TEST_INVOICE_FOLDER),
-                "TEST_TEMPLATE_FOLDER": tk.StringVar(value=config.TEST_TEMPLATE_FOLDER),
-                "INBOX_CYCLE_TIME": tk.IntVar(value=config.INBOX_CYCLE_TIME),
-                "RECONNECT_TIME": tk.IntVar(value=config.RECONNECT_TIME),
-                "RECEIVER_EMAIL": tk.StringVar(value=config.RECEIVER_EMAIL),
-                "SCANNER_EMAIL": tk.StringVar(value=config.SCANNER_EMAIL),
+            settings = {
+                "APC_USER": tk.StringVar(value=config["APC_USER"]),
+                "APC_PASS": tk.StringVar(value=config["APC_PASS"]),
+                "LOG_FILE": tk.StringVar(value=config["LOG_FILE"]),
+                "INVOICE_FOLDER": tk.StringVar(value=config["INVOICE_FOLDER"]),
+                "TEMPLATE_FOLDER": tk.StringVar(value=config["TEMPLATE_FOLDER"]),
+                "TEST_INVOICE_FOLDER": tk.StringVar(value=config["TEST_INVOICE_FOLDER"]),
+                "TEST_TEMPLATE_FOLDER": tk.StringVar(value=config["TEST_TEMPLATE_FOLDER"]),
+                "TEST_INVOICE": tk.StringVar(value=config["TEST_INVOICE"]),
+                "INBOX_CYCLE_TIME": tk.IntVar(value=config["INBOX_CYCLE_TIME"]),
+                "RECONNECT_TIME": tk.IntVar(value=config["RECONNECT_TIME"]),
+                "RECEIVER_EMAIL": tk.StringVar(value=config["RECEIVER_EMAIL"]),
+                "SCANNER_EMAIL": tk.StringVar(value=config["SCANNER_EMAIL"]),
             }
-            for i, (key, var) in enumerate(vars.items()):
+            for i, (key, var) in enumerate(settings.items()):
                 label = tk.Label(settings_tab, text=key + ":")
                 label.grid(row=i, column=0, padx=5, pady=5, sticky=tk.W)
                 entry = tk.Entry(settings_tab, textvariable=var, width=100)
@@ -320,22 +327,16 @@ class EmailProcessor:
             def save_settings():
                 # Saves settings to config.py
                 try:
-                    lines = []
-                    with open(self.CONFIG_PATH, "r") as f:
-                        for line in f:
-                            for key, var in vars.items():
-                                if line.startswith(key):
-                                    line = f"{key} = {repr(var.get())}\n"
-                            lines.append(line)
-                                    
-                    with open(self.CONFIG_PATH, "w") as f:
-                        f.writelines(lines)
+                    settings = {key: var.get() for key, var in settings.items()}
+                    with open(os.path.join(os.path.dirname(__file__), "config.json"), "w", encoding="utf-8") as f:
+                        json.dump(settings, f, indent=2)
+                    config.update(settings)
+                    self.rectangulator_handler.refresh_config()
                     messagebox.showinfo("Settings", "Settings saved successfully.")
-                    importlib.reload(config)  # Reload config module to apply changes
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to save settings: {str(e)}")
             save_button = tk.Button(settings_tab, text="Save Settings", command=save_settings)
-            save_button.grid(row=len(vars), column=0, columnspan=2, pady=10)
+            save_button.grid(row=len(settings), column=0, columnspan=2, pady=10)
 
             # About tab
             about_tab = tk.Frame(notebook)
@@ -394,14 +395,14 @@ class EmailProcessor:
 
     def main(self):  # Runs when start button is pressed
         if self.TESTING:  # set appropriate folders for testing
-            self.TEMPLATE_FOLDER = config.TEST_TEMPLATE_FOLDER
-            self.INVOICE_FOLDER = config.TEST_INVOICE_FOLDER
+            self.TEMPLATE_FOLDER = config["TEST_TEMPLATE_FOLDER"]
+            self.INVOICE_FOLDER = config["TEST_INVOICE_FOLDER"]
             self.log("Testing mode enabled", tag="yellow")
         else:
-            self.TEMPLATE_FOLDER = config.TEMPLATE_FOLDER
-            self.INVOICE_FOLDER = config.INVOICE_FOLDER
+            self.TEMPLATE_FOLDER = config["TEMPLATE_FOLDER"]
+            self.INVOICE_FOLDER = config["INVOICE_FOLDER"]
 
-        with open(config.LOG_FILE, "a") as file:  # open log file
+        with open(config["LOG_FILE"], "a") as file:  # open log file
             file.write("\n\n")
         self.log("Connecting...", tag="dgreen")
         self.root.update()
@@ -441,20 +442,20 @@ class EmailProcessor:
             try:
                 with self.imap_lock:  # ensure thread-safe access to imap
                     return func(*args, **kwargs)
-            except (imaplib.IMAP4.abort, TimeoutError, socket.gaierror, ssl.SSLError, socket.error, TimeoutError) as e:
+            except (imaplib.IMAP4.abort, TimeoutError, socket.gaierror, ssl.SSLError, socket.error) as e:
                 self.log(f"Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
                 time.sleep(5)
                 self.logout(reconnect=True)
-                raise
+                continue
             except Exception as e:
                 self.log(f"An error occurred: {str(e)}", tag="red", send_email=True)
-                raise 
+                continue
 
     def connect(self, log=True):  # Connects email, returns imap object
-        user = f"{self.username}{config.ADDRESS}"
+        user = f"{self.username}.sndex@gmail.com"
         try:
-            imap = imaplib.IMAP4_SSL(config.IMAP_SERVER)
-            imap.socket().settimeout(10)
+            imap = imaplib.IMAP4_SSL("imap.gmail.com")
+            imap.socket().settimeout(100)
             imap.login(user, self.password)
             self.connected = True
             if log:
@@ -503,7 +504,7 @@ class EmailProcessor:
                     if not new_uids:
                         self.log(f"No new emails - {self.current_time} {self.current_date}", tag="no_new_emails", write=False)
                         self.check_labels(["Need_Print", "Errors"], self.imap)
-                        self.pause_event.wait(timeout=config.INBOX_CYCLE_TIME)  # pause until next cycle
+                        self.pause_event.wait(timeout=config["INBOX_CYCLE_TIME"])  # pause until next cycle
                     else:
                         for uid in new_uids:
                             threading.Thread(target=self.process_email, args=(uid,), daemon=True).start()
@@ -511,7 +512,8 @@ class EmailProcessor:
 
                     cycle_count += 1
                     # Reconnect every hour
-                    if cycle_count % config.RECONNECT_CYCLE_COUNT == 0:
+                    RECONNECT_CYCLE_COUNT = ceil(config["RECONNECT_TIME"] / config["INBOX_CYCLE_TIME"])
+                    if cycle_count % RECONNECT_CYCLE_COUNT == 0:
                         self.reconnect()
                         cycle_count = 0
 
@@ -542,21 +544,22 @@ class EmailProcessor:
             sender_email = email.utils.parseaddr(msg["From"])[1]
 
             # Check if sender is trusted
-            if not sender_email.endswith(config.TRUSTED_ADDRESS):
+            if not sender_email.endswith(self.EMAIL_ENDING):
                 self.move_email(mail, "Not_Invoices", "INBOX", imap)
                 return
 
             # Check for attachments
             has_attachment = any(
                 part.get_content_disposition() == "attachment"
-                and part.get_filename().lower().endswith(".pdf")
+                and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf")
                 for part in msg.walk())
             if not has_attachment:
+                self.log(f"No PDF attachment in '{subject}', skipping.", tag="orange")
                 pass
             else:
                 with self.current_emails_lock:
                     self.current_emails.add(mail)
-                self.handle_attachments(mail, imap, subject, sender_email)
+                self.handle_attachments(mail, imap, msg, subject, sender_email)
         except Exception as e:
             self.log(f"An error occurred while processing an email: {str(e)} \n{traceback.format_exc()}", tag="red", send_email=True)
             self.move_email(mail, "Errors", "INBOX", imap)
@@ -566,10 +569,10 @@ class EmailProcessor:
                 print(f"-Disconncting imap for email {mail} - {subject}")
                 imap.logout()
             except:
+                self.log(f"Error occurred while logging out: {str(e)}", tag="red", send_email=True)
                 pass
 
-    def handle_attachments(self, mail, imap, subject, sender_email):  # Iterate over email parts and find pdf, ran by process_email
-        msg = self.get_msg(mail, "INBOX", imap)
+    def handle_attachments(self, mail, imap, msg, subject, sender_email):  # Iterate over email parts and find pdf, ran by process_email
         if msg is None:
             self.log(f"Email not found (handle_attachments): {mail}", tag="red", send_email=True)
             return
@@ -593,6 +596,9 @@ class EmailProcessor:
                     filename = f"{filename[:-4]}_{str(int(time.time()))}.pdf"
                     filepath = os.path.join(self.INVOICE_FOLDER, filename)
                     self.log(f"New invoice file already exists, renamed {filename}", tag="orange")
+
+                # Sanitize filepath
+                filepath = re.sub(r'[\n\r\t]', ' ', filepath)
 
                 # Download invoice PDF
                 with open(filepath, "wb") as file:
@@ -621,7 +627,7 @@ class EmailProcessor:
                         self.add_to_queue(mail, subject, filename, filepath, testing="test")
                     elif self.TESTING:
                         self.add_to_queue(mail, subject, filename, filepath, testing=True)
-                    elif sender_email == config.SCANNER_EMAIL:
+                    elif sender_email == config["SCANNER_EMAIL"]:
                         self.add_to_queue(mail, subject, filename, filepath, testing="scanner")
                     else:
                         self.add_to_queue(mail, subject, filename, filepath)
@@ -650,8 +656,8 @@ class EmailProcessor:
                         tags=("pending",))
                     
                 if task_type == "STATUS":
-                    id, status = task[1:3]
-                    item = self.inbox.item(id)
+                    _id, status = task[1:3]
+                    item = self.inbox.item(_id)
                     values = list(item["values"])
 
                     if status == "saved":
@@ -660,18 +666,18 @@ class EmailProcessor:
                         values[6] = filepath
                         if filename != "Not Invoice":
                             values[3] = "Yes"
-                        self.inbox.item(id, tags=("finished",))
+                        self.inbox.item(_id, tags=("finished",))
                     elif status == "printed":
                         values[4] = "Yes"
                     elif status.startswith("Error"):
                         values[5] = status
-                        self.inbox.item(id, tags=("error",))
-                    self.inbox.item(id, values=values)
+                        self.inbox.item(_id, tags=("error",))
+                    self.inbox.item(_id, values=values)
 
                 if task_type == "REMOVE":
-                    id = task[1]
-                    if id in self.inbox.get_children():
-                        self.inbox.delete(id)
+                    _id = task[1]
+                    if _id in self.inbox.get_children():
+                        self.inbox.delete(_id)
 
                 if task_type == "RECTANGULATE":
                     self.gui_busy = True
@@ -696,7 +702,8 @@ class EmailProcessor:
             # Check if Rectangulator fails
             if return_list == [] or return_list[0] == None:
                 self.move_email(mail, "Errors", "INBOX", self.imap)
-                os.remove(filepath)
+                if os.path.exists(filepath):
+                    os.remove(filepath)
                 self.log(f"Failed to download '{filename}', moved to Error label, not printed", tag="red", send_email=True)
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Rectangulating"))
                 return
@@ -705,7 +712,8 @@ class EmailProcessor:
             if return_list[0] == "test_email":
                 self.log(f"Test complete", tag="purple")
                 self.move_email(mail, "Test_Email", "INBOX", self.imap)
-                os.remove(filepath)
+                if os.path.exists(filepath):
+                    os.remove(filepath)
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Test Email", "None"))
                 return
 
@@ -757,12 +765,12 @@ class EmailProcessor:
         if not item or "finished" not in self.inbox.item(item[0], "tags"):
             return
         
-        id = item[0]
-        values = self.inbox.item(id, "values")  # Get values of selected item
-        new_id = f"{id}_{int(time.time())}" # create new unique id for archive item
+        _id = item[0]
+        values = self.inbox.item(_id, "values")  # Get values of selected item
+        new_id = f"{_id}_{int(time.time())}" # create new unique id for archive item
 
         if values[2] == "Test Email":  # If item is test email, don't archive
-            self.inbox.delete(id)
+            self.inbox.delete(_id)
             return
         
         self.archive.insert(
@@ -771,35 +779,35 @@ class EmailProcessor:
             values=(values[0], values[1], values[2], values[3], values[4], values[5], values[6]),
             tags=("default",))
         self.save_archive((new_id, values[0], values[1], values[2], values[3], values[4], values[5], values[6]))  # Save to archive
-        self.inbox.delete(id)  # Remove item from inbox
+        self.inbox.delete(_id)  # Remove item from inbox
         if log:
-            self.log(f"Archived inbox item {id} as {new_id}.", tag="blue")
+            self.log(f"Archived inbox item {_id} as {new_id}.", tag="blue")
 
     def remove_archive_item(self, event):  # Removes archive item on double right click
         item = self.archive.selection()  # Get selected item
         if not item:
             return
         
-        id = item[0]
-        self.archive.delete(id)  # Remove item from archive tree
-        self.db.execute("DELETE FROM archive WHERE id = ?", (id,))  # Remove from database
+        _id = item[0]
+        self.archive.delete(_id)  # Remove item from archive tree
+        self.db.execute("DELETE FROM archive WHERE id = ?", (_id,))  # Remove from database
         self.db.commit() 
-        self.log(f"Removed archive item {id} from archive.", tag="blue")  # Log removal
+        self.log(f"Removed archive item {_id} from archive.", tag="blue")  # Log removal
 
     def print_archive_item(self, event): # Prints archive item on middle click
         item = self.archive.selection()
         if not item:
             return
         
-        id = item[0]
-        filepath = self.archive.item(id, "values")[-1]
+        _id = item[0]
+        filepath = self.archive.item(_id, "values")[-1]
         if not filepath or not os.path.exists(filepath):
-            self.log(f"File not found for printing archive item {id}, {filepath}", tag="red")
+            self.log(f"File not found for printing archive item {_id}, {filepath}", tag="red")
             return
         try:
             self.print_invoice(filepath)
         except Exception as e:
-            self.log(f"Error printing archive item {id}: {str(e)}", tag="red")
+            self.log(f"Error printing archive item {_id}: {str(e)}", tag="red")
 
     def archive_all(self):  # Archives all inbox items
         self.log(f"Archiving {len(self.inbox.get_children())} items.", tag="blue")
@@ -819,10 +827,10 @@ class EmailProcessor:
         item = self.archive.selection()
         if not item:
             return
-        id = item[0]
-        filepath = self.archive.item(id, "values")[-1]  # Get filepath from selected item
+        _id = item[0]
+        filepath = self.archive.item(_id, "values")[-1]  # Get filepath from selected item
         if not filepath or not os.path.exists(filepath):
-            self.log(f"File not found for archive item {id}: {filepath}", tag="red", send_email=True)
+            self.log(f"File not found for archive item {_id}: {filepath}", tag="red", send_email=True)
             return
         try:
             os.startfile(filepath)  # Open the file
@@ -855,7 +863,7 @@ class EmailProcessor:
             self.log(f"Transfer failed for '{subject}': {str(e)} \n{traceback.format_exc()}", tag="red", send_email=True)
 
     def send_email(self, body):  # Sends email to me
-        sender_email = f"{self.username}{config.ADDRESS}"
+        sender_email = f"{self.username}.sndex@gmail.com"
         try:
             if self.TESTING:
                 return
@@ -864,14 +872,14 @@ class EmailProcessor:
             message = MIMEMultipart()
             message["Subject"] = "Alert"
             message["From"] = sender_email
-            message["To"] = config.RECEIVER_EMAIL
+            message["To"] = config["RECEIVER_EMAIL"]
             message.attach(MIMEText(body, "plain"))
 
             # Send the email using SMTP
-            with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
+            with smtplib.SMTP("smtp.gmail.com", 587) as server:
                 server.starttls()
                 server.login(sender_email, self.password)
-                server.sendmail(sender_email, config.RECEIVER_EMAIL, message.as_string())
+                server.sendmail(sender_email, config["RECEIVER_EMAIL"], message.as_string())
         except Exception as e:
             self.log(f"Error sending email - {str(e)}", tag="red")
 
@@ -903,8 +911,13 @@ class EmailProcessor:
     def print_invoice(self, filepath, inbox_item_id=None):  # Printer
         try:
             # Get default printer and print
-            p = win32print.GetDefaultPrinter()
-            print(p)
+            printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
+            p = None
+            for printer in printers:
+                if printer[2] == r"\\acdc1\Color Printer Near Server":
+                    p = printer[2]
+                    break
+            print(f"Printing to {p}")
             win32api.ShellExecute(0, "print", filepath, None, ".", 0)
             self.log(f"Printed {os.path.basename(filepath)}.", tag="lgreen")
             if inbox_item_id:
@@ -940,7 +953,7 @@ class EmailProcessor:
 
             # Write to the log file
             if write:
-                with open(config.LOG_FILE, "a") as file:
+                with open(config["LOG_FILE"], "a") as file:
                     file.write(message + "\n")
         except Exception as e:
             print(f"-Error logging: {str(e)}")
@@ -1084,7 +1097,7 @@ class EmailProcessor:
     def test_rectangulator(self):  # Opens rectangulator with test invoice
         self.log("Testing Rectangulator...", tag="yellow")
         return_list = []
-        return_list = self.rectangulator_handler.rectangulate("Testing Rectangulator", config.TEST_INVOICE, self, config.TEST_TEMPLATE_FOLDER, True)
+        return_list = self.rectangulator_handler.rectangulate("Testing Rectangulator", config["TEST_INVOICE"], self, config["TEST_TEMPLATE_FOLDER"], True)
         if return_list != []:
             new_filepath, should_print = return_list
             self.log(f"Test complete - new_filepath: {new_filepath}, should_print: {should_print}", tag="purple")
@@ -1126,7 +1139,7 @@ class EmailProcessor:
 
     def load_crash_counter(self): # Sets date variable from config
         try:
-            last_crash_date = config.LAST_CRASH_DATE.strip()
+            last_crash_date = config.get("LAST_CRASH_DATE")
             self.last_crash_date = last_crash_date if last_crash_date else str(datetime.now().strftime("%Y-%m-%d"))
         except Exception as e:
             print(f"-No crash date found {str(e)}")
@@ -1135,15 +1148,9 @@ class EmailProcessor:
 
     def save_crash_counter(self): # Overwrites date in config
         try:
-            lines = []
-            with open(self.CONFIG_PATH, "r") as f:
-                for line in f:
-                    if line.startswith("LAST_CRASH_DATE"):
-                        line = f"LAST_CRASH_DATE = '{self.last_crash_date}'"
-                    lines.append(line)
-            with open(self.CONFIG_PATH, "w") as f:
-                f.writelines(lines)
-            importlib.reload(config)  # Reload config module to apply changes
+            config["LAST_CRASH_DATE"] = self.last_crash_date
+            with open(os.path.join(os.path.dirname(__file__), "config.json"), "w") as f:
+                json.dump(config, f, indent=2)
         except Exception as e:
             print(f"-what happened {str(e)}")
 

@@ -4,7 +4,7 @@
 /Drivers
 /__pycache__
 /Invoices
-/config.py
 /loginulator_config.py
 /test.py
 /archive.db
+/config.json
