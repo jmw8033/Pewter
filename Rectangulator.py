@@ -14,7 +14,7 @@ import traceback
 import threading
 import warnings
 import smtplib
-import config
+import json
 import time
 import fitz
 import glob
@@ -23,13 +23,14 @@ import os
 
 warnings.simplefilter("ignore", UserWarning)
 
+with open(os.path.join(os.path.dirname(__file__), "config.json")) as f:
+    config = json.load(f)
 
 class RectangulatorHandler:
 
     def __init__(self, root, fig, ax):
         self.queue = []
         self.invoice = True
-        self.log_file = config.LOG_FILE
         self.should_print = True
         self.should_save = True
         self.hit_submit = False
@@ -37,7 +38,12 @@ class RectangulatorHandler:
         self.fig = fig
         self.ax = ax
         self.done_var = tk.IntVar()
-        self.LOG_FILE = config.LOG_FILE
+        self.config = config
+
+
+    def refresh_config(self):
+        with open(os.path.join(os.path.dirname(__file__), "config.json"), "r") as f:
+            self.config = json.load(f)
 
     def rectangulate(self, filename, filepath, root, template_folder, testing=False):  # Add a file to the queue, or process it immediately if template exists
         # If in away mode, just print and move to away label
@@ -274,7 +280,7 @@ class RectangulatorHandler:
         if send_email:
             self.send_email(message, self.root)
 
-        with open(self.LOG_FILE, "a") as file:
+        with open(self.config["LOG_FILE"], "a") as file:
             file.write(message + "\n")
 
     def sanitize_filename(self, filename):  # Remove invalid characters from the filename
@@ -406,27 +412,27 @@ class RectangulatorHandler:
 
     def send_email(self, body, root):  # Sends email to me
         if root:
-            sender_email = f"{root.username}{config.ADDRESS}"
+            sender_email = f"{root.username}.sndex@gmail.com"
             password = root.password
             if root.TESTING:
                 return
         else:
-            sender_email = f"{config.ACP_USER}{config.ADDRESS}"
-            password = config.ACP_PASS
+            sender_email = f"{self.config['ACP_USER']}.sndex@gmail.com"
+            password = self.config['ACP_PASS']
 
         try:
             # Create a multipart message and set headers
             message = MIMEMultipart()
             message["Subject"] = "Alert"
             message["From"] = sender_email
-            message["To"] = config.RECEIVER_EMAIL
+            message["To"] = self.config["RECEIVER_EMAIL"]
             message.attach(MIMEText(body, "plain"))
 
             # Send the email
-            with smtplib.SMTP(config.SMTP_SERVER, 587) as server:
+            with smtplib.SMTP("smtp.gmail.com", 587) as server:
                 server.starttls()
                 server.login(sender_email, password)
-                server.sendmail(sender_email, config.RECEIVER_EMAIL, message.as_string())
+                server.sendmail(sender_email, self.config["RECEIVER_EMAIL"], message.as_string())
             self.log(f"Email sent successfully: {body}")
         except Exception as e:
             self.log(f"Error sending email {body} - {str(e)}")
@@ -451,7 +457,6 @@ class Rectangulator:
 
     def __init__(self, ax, fig, pdf_path, template_folder, rectangulator_handler):
         self.rectangulator_handler = rectangulator_handler
-        self.log_file = rectangulator_handler.log_file
         self.pdf_path = pdf_path
         self.template_folder = template_folder
         self.fig = fig

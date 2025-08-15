@@ -1,0 +1,14 @@
+{
+  "APC_USER": "precast",
+  "APC_PASS": "yolhphmgrbzqqxcn",
+  "LOG_FILE": "T:\\Joey\\Pewter\\Log.txt",
+  "INVOICE_FOLDER": "S:\\Titan_DM\\Titan_Inbox\\AP_Emailed_Invoices",
+  "TEMPLATE_FOLDER": "S:\\Titan_DM\\Titan_Inbox\\AP_Emailed_Invoices\\Templates",
+  "TEST_INVOICE_FOLDER": "S:\\Titan_DM\\Titan_Inbox\\AP_Emailed_Invoices\\Test Invoices",
+  "TEST_TEMPLATE_FOLDER": "S:\\Titan_DM\\Titan_Inbox\\AP_Emailed_Invoices\\Test Invoices",
+  "TEST_INVOICE": "S:\\Titan_DM\\Titan_Inbox\\AP_Emailed_Invoices\\Test Invoices\\Test Invoice.pdf",
+  "INBOX_CYCLE_TIME": 5,
+  "RECONNECT_TIME": 3600,
+  "RECEIVER_EMAIL": "jmwesthoff@atlanticconcrete.com",
+  "SCANNER_EMAIL": "MFP@atlanticconcrete.com"
+}
