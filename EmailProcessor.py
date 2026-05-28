@@ -12,6 +12,8 @@ import win32api
 import socket
 import json
 import ssl
+import random
+import string
 import imaplib
 import smtplib
 import sqlite3
@@ -593,7 +595,7 @@ class EmailProcessor:
 
                 # Check if file already exists
                 if os.path.exists(filepath):
-                    filename = f"{filename[:-4]}_{str(int(time.time()))}.pdf"
+                    filename = f"{filename[:-4]}_{''.join(random.choices(string.ascii_letters + string.digits, k=10))}.pdf"
                     filepath = os.path.join(self.INVOICE_FOLDER, filename)
                     self.log(f"New invoice file already exists, renamed {filename}", tag="orange")
 
@@ -611,7 +613,7 @@ class EmailProcessor:
                     new_filepath = template_exists[0]
                     # Check if file already exists
                     if os.path.exists(new_filepath):
-                        filename = f"{os.path.basename(new_filepath)[:-4]}_{str(int(time.time()))}.pdf"
+                        filename = f"{os.path.basename(new_filepath)[:-4]}_{''.join(random.choices(string.ascii_letters + string.digits, k=10))}.pdf"
                         new_filepath = os.path.join(self.INVOICE_FOLDER, filename)                        
                         self.log(f"New invoice file already exists, renamed {filename}", tag="orange")
                         
