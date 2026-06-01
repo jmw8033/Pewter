@@ -4,7 +4,6 @@ from tkinter import ttk, messagebox
 from datetime import datetime
 from math import ceil
 import threading
-import importlib
 import traceback
 import win32print
 import win32gui
@@ -750,7 +749,7 @@ class EmailProcessor:
             if os.path.exists(new_filepath):
                 old_filepath = new_filepath
                 self.log(f"New invoice file already exists at {os.path.basename(old_filepath)} -- {self.current_time} {self.current_date}", tag="orange")
-                new_filepath = f"{old_filepath[:-4]}_{str(int(time.time()))}.pdf"
+                new_filepath = f"{old_filepath[:-4]}_{''.join(random.choices(string.ascii_letters + string.digits, k=10))}.pdf"
 
             # Save invoice
             os.rename(filepath, new_filepath)
