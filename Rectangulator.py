@@ -524,7 +524,7 @@ class Rectangulator:
 
     def save_template(self):  # Save the template to a text file
         # Save the template to a text file as Company Name?x?y?width?height and so on
-        filename = rf"{self.template_folder}\{self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path))}{str(int(time.time()))}.txt"
+        filename = rf"{self.template_folder}\{self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path))}.txt"
         # Check if the file already exists or filename is empty
         if filename == "":
             self.rectangulator_handler.log(f"Filename empty, not creating template")
