@@ -12,6 +12,7 @@ import win32print
 import win32api
 import traceback
 import threading
+import keyring
 import warnings
 import smtplib
 import json
@@ -25,6 +26,14 @@ warnings.simplefilter("ignore", UserWarning)
 
 with open(os.path.join(os.path.dirname(__file__), "config.json")) as f:
     config = json.load(f)
+
+def get_password(username):
+    password = keyring.get_password("PewterInvoiceProcessor", username)
+    if password is None:
+        print(f"No stored password for '{username}'. Store one with:")
+        print(f"  keyring.set_password('PewterInvoiceProcessor', '{username}', '<app password>')")
+        exit(1)
+    return password
 
 class RectangulatorHandler:
 
@@ -84,7 +93,7 @@ class RectangulatorHandler:
         return [None, False]
 
     def check_templates(self, pdf_path, template_folder, root):  # Check if a template exists for the invoice
-        for file in glob.glob(rf"{template_folder}\*.txt"):
+        for file in glob.glob(os.path.join(template_folder, "*.txt")):
             try:
                 with open(file, "r") as f:
                     while True:
@@ -98,6 +107,8 @@ class RectangulatorHandler:
 
                         # Get the company name from the invoice
                         identifier = self.get_text_in_rect(Rectangle((invoice_name[1], invoice_name[2]), invoice_name[3], invoice_name[4]), pdf_path)
+                        # Sanitize identifier
+                        identifier = self.sanitize_filename(identifier)
 
                         # If company name on invoice matches name on template, use that template
                         if identifier.strip() and invoice_name[0] == identifier:
@@ -107,7 +118,7 @@ class RectangulatorHandler:
                             invoice_num = self.get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
                             # Clean the invoice date
                             invoice_date = self.clean_date(invoice_date)
-                            return [rf"{os.path.dirname(pdf_path)}\{invoice_date}_{invoice_num}.pdf"]
+                            return [os.path.join(os.path.dirname(pdf_path), f"{invoice_date}_{invoice_num}.pdf")]
             except Exception as e:
                 self.log(f"Error checking template {file}: {str(e)}", tag="red", display=True)
                 pass
@@ -200,22 +211,23 @@ class RectangulatorHandler:
         text_box_ax = self.fig.add_axes([0.1, 0.005, 0.35, 0.075])
         text_box = TextBox(text_box_ax, label="", initial="")
 
-        def on_text_submit(text):
+        def on_text_submit(event=None):
+            # Runs on the Tk main thread (matplotlib button callback). create_alert
+            # uses wait_window(), which MUST run on the main thread — do not spawn
+            # a worker thread here.
             if self.hit_submit:
                 return
             self.hit_submit = True
-
-            def answer_thread():
-                filename_is_correct = self.create_alert(f"Is '{text_box.text}' the correct filename?")
-                self.hit_submit = False
+            try:
+                filename_is_correct = self.create_alert(
+                    f"Is '{text_box.text}' the correct filename?")
                 if filename_is_correct:
                     self.ax.clear()
                     self.ax.axis("off")
                     self.fig.canvas.draw_idle()
                     self.done_var.set(1)  # signal that the user is done
-
-            # run in a separate thread to avoid blocking the main thread
-            threading.Thread(target=answer_thread).start()  
+            finally:
+                self.hit_submit = False
 
         submit_button_ax = self.fig.add_axes([0.45, 0.005, 0.15, 0.075])
         submit_button = Button(submit_button_ax, "Submit")
@@ -428,8 +440,8 @@ class RectangulatorHandler:
             if root.TESTING:
                 return
         else:
-            sender_email = f"{self.config['ACP_USER']}.sndex@gmail.com"
-            password = self.config['ACP_PASS']
+            sender_email = f"{self.config['APC_USER']}.sndex@gmail.com"
+            password = get_password(self.config['APC_USER'])
 
         try:
             # Create a multipart message and set headers
@@ -498,16 +510,12 @@ class Rectangulator:
 
     def rename_pdf(self):  # Rename the PDF based on extracted text from rectangles
         try:
-            if len(self.rectangles) == 3 and all(
-                    self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles):
+            extracted_texts = [self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles]
+            if len(self.rectangles) == 3 and all(extracted_texts):
                 self.rectangulator_handler.log(f"Creating new template")
                 self.save_template()
 
                 # Rename the PDF based on extracted text from rectangles in format "MM-DD-YY_INVOICE_NUMBER"
-                extracted_texts = [
-                    self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles
-                    if self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path)
-                ]
                 extracted_texts[1] = self.rectangulator_handler.clean_date(extracted_texts[1])  # fix date
                 extracted_text_combined = "_".join(extracted_texts[1:])  # combine date and invoice number
                 sanitized_extracted_text = self.rectangulator_handler.sanitize_filename(extracted_text_combined)  # sanitize the text
@@ -524,11 +532,13 @@ class Rectangulator:
 
     def save_template(self):  # Save the template to a text file
         # Save the template to a text file as Company Name?x?y?width?height and so on
-        filename = rf"{self.template_folder}\{self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path))}.txt"
+        company_name = self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path))
         # Check if the file already exists or filename is empty
-        if filename == "":
+        if not company_name:
             self.rectangulator_handler.log(f"Filename empty, not creating template")
             return
+        filename = os.path.join(self.template_folder, f"{company_name}.txt")
+
         with open(filename, "a") as file:
             for i, coord in enumerate(self.coordinates):
                 x, y, width, height = coord
@@ -571,40 +581,8 @@ class Rectangulator:
                     "Please draw exactly three rectangles", display=True)
                 self.reset_rectangles()
                 return
-
-            # Ask for verifictaion
-            def handle_user_input():
-                if self.correcting_rect_index is not None:
-                    corrected_rect = self.rectangles.pop()
-                    corrected_coord = self.coordinates.pop()
-                    self.rectangles.insert(self.correcting_rect_index, corrected_rect)
-                    self.coordinates.insert(self.correcting_rect_index, corrected_coord)
-
-                # Show extracted text for verification
-                headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
-                extracted_text = ""
-                for i, rect in enumerate(self.rectangles):
-                    extracted_text += (headers[i] + self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) + "\n")
-                text_is_correct = self.rectangulator_handler.create_alert(
-                    f"Does the following text match what you selected?\n\n{extracted_text}",
-                    numbered_buttons=3)
-
-                # If user says yes, close the window, otherwise reset the rectangles
-                if isinstance(text_is_correct,int) and not isinstance(text_is_correct, bool):
-                    self.correcting_rect_index = text_is_correct
-                    self.rectangulator_handler.log(f"Please reselect {headers[self.correcting_rect_index]}")
-                    self.reset_rectangles(specific_rect=self.correcting_rect_index)
-                elif text_is_correct:
-                    self.ax.clear()
-                    self.ax.axis("off")
-                    self.fig.canvas.draw_idle()
-                    self.rectangulator_handler.done_var.set(1)
-                else:
-                    self.rectangulator_handler.log("Please reselect rectangles", display=True)
-                    self.reset_rectangles()
-
-            input_thread = threading.Thread(target=handle_user_input)
-            input_thread.start()
+            
+            self.verify_selection()
 
     def on_button_release(self, event):  # Handle key release events
         if event.button == 1 and self.rect:  # left mouse button, save rectangle
@@ -703,3 +681,33 @@ class Rectangulator:
         self.ax.set_xlim(new_xlim)
         self.ax.set_ylim(new_ylim)
         self.ax.figure.canvas.draw()
+
+    def verify_selection(self):
+        if self.correcting_rect_index is not None:
+            corrected_rect = self.rectangles.pop()
+            corrected_coord = self.coordinates.pop()
+            self.rectangles.insert(self.correcting_rect_index, corrected_rect)
+            self.coordinates.insert(self.correcting_rect_index, corrected_coord)
+
+        # Show extracted text for verification
+        headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
+        extracted_text = ""
+        for i, rect in enumerate(self.rectangles):
+            extracted_text += (headers[i] + self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) + "\n")
+        text_is_correct = self.rectangulator_handler.create_alert(
+            f"Does the following text match what you selected?\n\n{extracted_text}",
+            numbered_buttons=3)
+
+        # If user says yes, close the window, otherwise reset the rectangles
+        if isinstance(text_is_correct,int) and not isinstance(text_is_correct, bool):
+            self.correcting_rect_index = text_is_correct
+            self.rectangulator_handler.log(f"Please reselect {headers[self.correcting_rect_index]}")
+            self.reset_rectangles(specific_rect=self.correcting_rect_index)
+        elif text_is_correct:
+            self.ax.clear()
+            self.ax.axis("off")
+            self.fig.canvas.draw_idle()
+            self.rectangulator_handler.done_var.set(1)
+        else:
+            self.rectangulator_handler.log("Please reselect rectangles", display=True)
+            self.reset_rectangles()

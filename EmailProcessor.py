@@ -37,8 +37,8 @@ class RedirectText:
         self.text_widget = text_widget
 
     def write(self, message):
-        self.text_widget.insert(tk.END, message)
-        self.text_widget.see(tk.END)
+        self.text_widget.after(0, self.text_widget.insert, tk.END, message)
+        self.text_widget.after(0, self.text_widget.see, tk.END)  # auto-scroll to the end
 
     def flush(self):
         pass
@@ -307,7 +307,6 @@ class EmailProcessor:
             notebook.add(settings_tab, text="Settings")
             settings = {
                 "APC_USER": tk.StringVar(value=config["APC_USER"]),
-                "APC_PASS": tk.StringVar(value=config["APC_PASS"]),
                 "LOG_FILE": tk.StringVar(value=config["LOG_FILE"]),
                 "INVOICE_FOLDER": tk.StringVar(value=config["INVOICE_FOLDER"]),
                 "TEMPLATE_FOLDER": tk.StringVar(value=config["TEMPLATE_FOLDER"]),
@@ -328,14 +327,15 @@ class EmailProcessor:
             def save_settings():
                 # Saves settings to config.py
                 try:
-                    settings = {key: var.get() for key, var in settings.items()}
-                    with open(os.path.join(os.path.dirname(__file__), "config.json"), "w", encoding="utf-8") as f:
-                        json.dump(settings, f, indent=2)
-                    config.update(settings)
+                    new_values = {key: var.get() for key, var in settings.items()}
+                    config.update(new_values)
+                    to_write = {k: v for k, v in config.items()}
+                    with open(self.CONFIG_PATH, "w", encoding="utf-8") as f:
+                        json.dump(to_write, f, indent=2)
                     self.rectangulator_handler.refresh_config()
                     messagebox.showinfo("Settings", "Settings saved successfully.")
                 except Exception as e:
-                    messagebox.showerror("Error", f"Failed to save settings: {str(e)}")
+                    messagebox.showerror("Error", f"Failed to save settings: {e}")
             save_button = tk.Button(settings_tab, text="Save Settings", command=save_settings)
             save_button.grid(row=len(settings), column=0, columnspan=2, pady=10)
 
@@ -408,7 +408,7 @@ class EmailProcessor:
         self.log("Connecting...", tag="dgreen")
         self.root.update()
         self.processor_running = True
-        self.button_startup()
+        self.ui(self.button_startup)
 
         # Login primary connnection to gmail
         self.imap_lock = threading.RLock()  # lock for imap connection
@@ -437,20 +437,21 @@ class EmailProcessor:
         self.print_errors_button.config(state=tk.DISABLED)
         self.test_inbox_button.config(state=tk.DISABLED)
 
-    def safe_imap(self, func, *args, **kwargs):
-        """Safely calls an imap function with error handling."""
-        for i in range(3):  # retry up to 3 times
+    class IMAPUnavailable(Exception):
+        pass
+
+    def safe_imap(self, func, *args, retries=3, **kwargs):
+        last = None
+        for attempt in range(retries):
             try:
-                with self.imap_lock:  # ensure thread-safe access to imap
+                with self.imap_lock:
                     return func(*args, **kwargs)
-            except (imaplib.IMAP4.abort, TimeoutError, socket.gaierror, ssl.SSLError, socket.error) as e:
-                self.log(f"Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
-                time.sleep(5)
-                self.logout(reconnect=True)
-                continue
-            except Exception as e:
-                self.log(f"An error occurred: {str(e)}", tag="red", send_email=True)
-                continue
+            except (imaplib.IMAP4.abort, TimeoutError, socket.gaierror,
+                    ssl.SSLError, OSError) as e:
+                last = e
+                self.log(f"IMAP error (attempt {attempt+1}/{retries}): {e}", tag="red")
+                time.sleep(min(2 ** attempt, 10))  # 1s, 2s, 4s...
+        raise self.IMAPUnavailable(str(last))
 
     def connect(self, log=True):  # Connects email, returns imap object
         user = f"{self.username}.sndex@gmail.com"
@@ -522,9 +523,9 @@ class EmailProcessor:
             self.disconnect(self.imap)
             if self.logging_out:
                 self.logging_out = False
-                self.start_button.config(state=tk.NORMAL)
-                self.testing_button.config(state=tk.NORMAL)
-                self.away_mode_button.config(state=tk.NORMAL)
+                self.ui(self.start_button.config, state=tk.NORMAL)
+                self.ui(self.testing_button.config, state=tk.NORMAL)
+                self.ui(self.away_mode_button.config, state=tk.NORMAL)
         except imaplib.IMAP4.abort as e:
             self.log(f"Search Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
             self.logout(reconnect=True)
@@ -558,8 +559,6 @@ class EmailProcessor:
                 self.log(f"No PDF attachment in '{subject}', skipping.", tag="orange")
                 pass
             else:
-                with self.current_emails_lock:
-                    self.current_emails.add(mail)
                 self.handle_attachments(mail, imap, msg, subject, sender_email)
         except Exception as e:
             self.log(f"An error occurred while processing an email: {str(e)} \n{traceback.format_exc()}", tag="red", send_email=True)
@@ -569,9 +568,16 @@ class EmailProcessor:
             try:
                 print(f"-Disconncting imap for email {mail} - {subject}")
                 imap.logout()
-            except:
+            except Exception as e:
                 self.log(f"Error occurred while logging out: {str(e)}", tag="red", send_email=True)
                 pass
+
+    def safe_pdf_name(self, filename):  # Sanitize filename to prevent issues
+        base = os.path.basename(filename or "invoice.pdf")
+        base = re.sub(r"[^\w.\- ]", "_", base).strip()
+        if not base.lower().endswith(".pdf"):
+            base += ".pdf"
+        return base or "invoice.pdf"
 
     def handle_attachments(self, mail, imap, msg, subject, sender_email):  # Iterate over email parts and find pdf, ran by process_email
         if msg is None:
@@ -586,10 +592,15 @@ class EmailProcessor:
                     and part.get_filename().lower().endswith(".pdf")):
 
                 # Get filename and attachment
-                filename = part.get_filename()
+                filename = self.safe_pdf_name(part.get_filename())
                 if self.TESTING == "test":  # when testing inbox
                     filename = f"Test_{filename}"
                 filepath = os.path.join(self.INVOICE_FOLDER, filename)
+
+                if os.path.commonpath([os.path.abspath(filepath), # ensure filepath is within invoice folder
+                       os.path.abspath(self.INVOICE_FOLDER)]) != os.path.abspath(self.INVOICE_FOLDER):
+                        raise ValueError("Refusing to write outside the invoice folder")
+
                 attachment = part.get_payload(decode=True)
 
                 # Check if file already exists
@@ -930,34 +941,44 @@ class EmailProcessor:
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Printing"))
             return False
 
-    def log(self, *args, tag=None, send_email=False, write=True):  # Logs to text box and log file
-        try:
-            if self.window_closed:  # check if window is still open
-                return
-            message = " ".join([str(arg) for arg in args])  # convert args to string
+    def log(self, *args, tag=None, send_email=False, write=True):
+        message = " ".join(str(a) for a in args)
 
-            # Get rid of no_new_emails and label_error messages
-            if tag == "no_new_emails" or tag == "label_error":
+        # Disk + network are thread-safe; do them here.
+        if write:
+            try:
+                with open(config["LOG_FILE"], "a", encoding="utf-8") as f:
+                    f.write(message + "\n")
+            except OSError as e:
+                print(f"-log file error: {e}")
+        if send_email and tag == "red":
+            threading.Thread(target=self.send_email, args=(message,), daemon=True).start()
+
+        # Widget access must run on the main thread.
+        try:
+            self.root.after(0, self._log_to_widget, message, tag)
+        except (RuntimeError, tk.TclError):
+            pass
+
+    def ui(self, fn, *args):
+        try:
+            self.root.after(0, lambda: fn(*args))
+        except (RuntimeError, tk.TclError):
+            pass
+
+    def _log_to_widget(self, message, tag):
+        if self.window_closed:
+            return
+        try:
+            if tag in ("no_new_emails", "label_error"):
                 self.remove_messages(message)
             else:
                 print(f"-{message}")
-
-            # Insert the new message to the text widget
             self.log_text_widget.insert(tk.END, message + "\n", (tag, "default"))
-            # If the bottom quarter of the text widget is visible, autoscroll
             if self.log_text_widget.yview()[1] > 0.75:
                 self.log_text_widget.yview_moveto(1)
-
-            # Send email for errors
-            if tag == "red" and send_email:
-                self.send_email(message)
-
-            # Write to the log file
-            if write:
-                with open(config["LOG_FILE"], "a") as file:
-                    file.write(message + "\n")
-        except Exception as e:
-            print(f"-Error logging: {str(e)}")
+        except tk.TclError:
+            pass
 
     def check_labels(self, labels, imap):  # Checks for emails that need to be looked at in labels
         # If passed one label, returns email uids, otherwise just logs the number of emails in each label
@@ -975,12 +996,12 @@ class EmailProcessor:
                     elif len(email_ids) > 0:
                         self.log(f"{len(email_ids)} emails in {label} - {self.current_time} {self.current_date}", tag="label_error", write=False)
                         if label == "Errors":
-                            self.errors_button.config(bg="#FBFF2C")
+                            self.ui(self.errors_button.config, bg="#FBFF2C")
                         elif label == "Need_Print":
-                            self.print_errors_button.config(bg="#FBFF2C")
+                            self.ui(self.print_errors_button.config, bg="#FBFF2C")
             except Exception as e:
                 self.log(f"An error occurred while checking the label: {str(e)}", tag="red", send_email=True)
-                raise imaplib.IMAP4.abort
+                raise imaplib.IMAP4.abort(str(e))
 
     def get_msg(self, mail, label, imap):  # Gets email message
         try:
@@ -1068,7 +1089,7 @@ class EmailProcessor:
 
     def logout(self, reconnect=False):  # Logs out
         self.log("Logging out...", tag="yellow")
-        self.button_logout()
+        self.ui(self.button_logout)
         self.pause_event.set()
         self.processor_running = False
         self.logging_out = True
@@ -1161,7 +1182,7 @@ class EmailProcessor:
         self.update_crash_counter_label()
 
     def update_crash_counter_label(self):
-        self.days_without_crashing.set(f"Days without crashing: {(datetime.today() - datetime.strptime(self.last_crash_date, '%Y-%m-%d')).days}")
+        self.ui(self.days_without_crashing.set, f"Days without crashing: {(datetime.today() - datetime.strptime(self.last_crash_date, '%Y-%m-%d')).days}")
 
     @property
     def current_time(self):
