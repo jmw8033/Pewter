@@ -510,7 +510,6 @@ class EmailProcessor:
                     else:
                         for uid in new_uids:
                             threading.Thread(target=self.process_email, args=(uid,), daemon=True).start()
-                        self.root.after(0, self.flash_taskbar)  # flash taskbar if new email
 
                     cycle_count += 1
                     # Reconnect every hour
@@ -634,6 +633,7 @@ class EmailProcessor:
                     self.move_email(mail, "Invoices", "INBOX", self.imap)
                 # No template found, add to rectangulator queue
                 else:  
+                    self.root.after(0, self.flash_taskbar)  # flash taskbar if new email
                     filenames.append(filename)
                     if subject == "Test":
                         self.add_to_queue(mail, subject, filename, filepath, testing="test")
