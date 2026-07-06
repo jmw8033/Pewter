@@ -210,6 +210,16 @@ class RectangulatorHandler:
         # Filename text box and submit button
         text_box_ax = self.fig.add_axes([0.1, 0.005, 0.35, 0.075])
         text_box = TextBox(text_box_ax, label="", initial="")
+        try:
+            text_box.set_active(True)
+        except Exception as e:
+            self.log(f"Error activating text box: {str(e)} \n{traceback.format_exc()}")
+        text_box.text_disp.set_horizontalalignment('right')
+        text_box.text_disp.set_position((0.95, 0.5))
+
+        # 3. Clip the text so anything spilling out the left side is visually hidden
+        text_box.text_disp.set_clip_on(True)
+        text_box.text_disp.set_clip_box(text_box_ax.bbox)
 
         def on_text_submit(event=None):
             # Runs on the Tk main thread (matplotlib button callback). create_alert

@@ -703,6 +703,34 @@ class EmailProcessor:
     def handle_rectangulator(self, mail, filename, filepath, testing):  # Handles rectangulator
         try:
             inbox_item_id = f"{mail}_{filename}"
+
+            # Just in time check for templates in case they were added after the email was processed
+            if testing is False:
+                template_exists = self.rectangulator_handler.check_templates(filepath, self.TEMPLATE_FOLDER, self.root)
+                if template_exists:
+                    self.log(f"Template found for queued item {filename} -- {self.current_date} {self.current_time}", tag="lgreen")
+                    new_filepath = template_exists[0]
+                    
+                    # Handle renaming if the target file already exists
+                    if os.path.exists(new_filepath):
+                        new_filename = f"{os.path.basename(new_filepath)[:-4]}_{''.join(random.choices(string.ascii_letters + string.digits, k=10))}.pdf"
+                        new_filepath = os.path.join(self.INVOICE_FOLDER, new_filename)
+                        self.log(f"New invoice file already exists, renamed {new_filename}", tag="orange")
+                        
+                    os.rename(filepath, new_filepath)
+                    self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", os.path.basename(new_filepath), new_filepath))
+                    self.print_invoice(new_filepath, inbox_item_id)
+                    self.move_email(mail, "Invoices", "INBOX", self.imap)
+
+                    # Decrement remaining PDFs counter to clear from current_emails
+                    if mail in self.remaining_pdfs:
+                        self.remaining_pdfs[mail] -= 1
+                        if self.remaining_pdfs[mail] == 0:
+                            del self.remaining_pdfs[mail]
+                    
+                    self.gui_busy = False # Free the queue
+                    return
+
             return_list = self.rectangulator_handler.rectangulate(filename, filepath, self, self.TEMPLATE_FOLDER, testing)
             print(f"-rectangulator returned: {return_list}")
 
