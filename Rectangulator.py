@@ -112,6 +112,17 @@ class RectangulatorHandler:
 
                         # If company name on invoice matches name on template, use that template
                         if identifier.strip() and invoice_name[0] == identifier:
+                            # Check if vendor in split invoice list
+                            split_vendors = [vendor.strip() for vendor in self.config.get("SPLIT_VENDORS", "").split(",") if vendor.strip()]
+                            if identifier in split_vendors:
+                                doc_temp = fitz.open(pdf_path)
+                                num_pages = len(doc_temp)
+                                doc_temp.close()
+
+                                if num_pages > 1:
+                                    self.log(f"Split vendor '{identifier}' detected with {num_pages} pages.")
+                                    return ["SPLIT_PDF", identifier]
+
                             self.log(f"Used template {file} for {identifier}")
                             # Get the invoice date and number from the invoice
                             invoice_date = self.get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)

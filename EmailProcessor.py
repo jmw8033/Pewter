@@ -19,6 +19,7 @@ import sqlite3
 import email
 import queue
 import time
+import fitz
 import sys
 import os
 import re
@@ -318,6 +319,7 @@ class EmailProcessor:
                 "RECONNECT_TIME": tk.IntVar(value=config["RECONNECT_TIME"]),
                 "RECEIVER_EMAIL": tk.StringVar(value=config["RECEIVER_EMAIL"]),
                 "SCANNER_EMAIL": tk.StringVar(value=config["SCANNER_EMAIL"]),
+                "SPLIT_VENDORS": tk.StringVar(value=config["SPLIT_VENDORS"]),
             }
             for i, (key, var) in enumerate(settings.items()):
                 label = tk.Label(settings_tab, text=key + ":")
@@ -623,6 +625,36 @@ class EmailProcessor:
                 # Check if template exists
                 template_exists = self.rectangulator_handler.check_templates(filepath, self.TEMPLATE_FOLDER, self.root)
                 if template_exists:
+                    # check for split invoice
+                    if template_exists[0] == "SPLIT_PDF":
+                        self.log(f"Split invoice detected for {filename} -- {self.current_date} {self.current_time}", tag="yellow")
+                        doc = fitz.open(filepath)
+                        for i in range(len(doc)):
+                            new_filename = f"{filename[:-4]}_part{i+1}.pdf"
+                            new_filepath = os.path.join(self.INVOICE_FOLDER, new_filename)
+                            self.log(f"Creating split invoice {i+1} of {len(doc)}: {new_filename}", tag="yellow")
+
+                            new_doc = fitz.open()
+                            new_doc.insert_pdf(doc, from_page=i, to_page=i)
+                            new_doc.save(new_filepath)
+                            new_doc.close()
+
+                            filenames.append(new_filename)
+                            if subject == "Test":
+                                self.add_to_queue(mail, subject, new_filename, new_filepath, testing="test")
+                            elif self.TESTING:
+                                self.add_to_queue(mail, subject, new_filename, new_filepath, testing=True)
+                            elif sender_email == config["SCANNER_EMAIL"]:
+                                self.add_to_queue(mail, subject, new_filename, new_filepath, testing="scanner")
+                            else:
+                                self.add_to_queue(mail, subject, new_filename, new_filepath)
+
+                        doc.close()
+                        os.remove(filepath)  # remove original split pdf
+                        continue  # skip the rest of the loop for this email
+
+
+
                     self.log(f"Template found for {filename} -- {self.current_date} {self.current_time}", tag="lgreen")
                     new_filepath = template_exists[0]
                     # Check if file already exists
@@ -635,7 +667,7 @@ class EmailProcessor:
                     self.gui_queue.put((0, "NEW", mail, subject, filename, new_filepath))
                     self.gui_queue.put((0, "STATUS", f"{mail}_{filename}", "saved", filename, new_filepath))
                     self.print_invoice(new_filepath, f"{mail}_{filename}")
-                    self.move_email(mail, "Invoices", "INBOX", self.imap)
+                    self.valid_invoice_flags[mail] = True
                 # No template found, add to rectangulator queue
                 else:  
                     self.root.after(0, self.flash_taskbar)  # flash taskbar if new email
@@ -649,7 +681,13 @@ class EmailProcessor:
                     else:
                         self.add_to_queue(mail, subject, filename, filepath)
         self.remaining_pdfs[mail] = len(filenames)
-        self.log(f"Processing {len(filenames)} PDF(s) for email '{subject}'", tag="blue")
+
+        if len(filenames) == 0:
+            if self.valid_invoice_flags.get(mail, False):
+                self.move_email(mail, "Invoices", "INBOX", self.imap)
+            else:
+                self.move_email(mail, "Not_Invoices", "INBOX", self.imap)
+            self.valid_invoice_flags.pop(mail, None)
 
     def add_to_queue(self, mail, subject, filename, filepath, testing=False):  # Adds invoices to queue, ran by handle_attachments
         try:
@@ -725,13 +763,21 @@ class EmailProcessor:
                     os.rename(filepath, new_filepath)
                     self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", os.path.basename(new_filepath), new_filepath))
                     self.print_invoice(new_filepath, inbox_item_id)
-                    self.move_email(mail, "Invoices", "INBOX", self.imap)
 
-                    # Decrement remaining PDFs counter to clear from current_emails
+                    # Set flag and count down instead of moving immediately ---
+                    self.valid_invoice_flags[mail] = True
+
                     if mail in self.remaining_pdfs:
                         self.remaining_pdfs[mail] -= 1
-                        if self.remaining_pdfs[mail] == 0:
+                        if self.remaining_pdfs[mail] <= 0:
                             del self.remaining_pdfs[mail]
+                            
+                            if self.valid_invoice_flags.get(mail, False):
+                                self.move_email(mail, "Invoices", "INBOX", self.imap)
+                            else:
+                                self.move_email(mail, "Not_Invoices", "INBOX", self.imap)
+                                
+                            self.valid_invoice_flags.pop(mail, None)
                     
                     self.gui_busy = False # Free the queue
                     return
