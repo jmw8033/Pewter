@@ -71,6 +71,7 @@ class EmailProcessor:
             self.current_emails = set()  # set of emails that are currently being processed
             self.current_emails_lock = threading.Lock()  # lock for current_emails
             self.remaining_pdfs = {}  # set of pdfs that are still being processed per uid
+            self.valid_invoice_flags = {} # dictionary to track if an invoice is valid per uid
 
             # GUI
             self.root = tk.Tk()
@@ -761,14 +762,26 @@ class EmailProcessor:
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Test Email", "None"))
                 return
 
-            # Check if email is already processed
+            new_filepath, should_print = return_list
+     
+            # If this specific PDF is an invoice, flag the email as containing an invoice
+            if new_filepath != "not_invoice":
+                self.valid_invoice_flags[mail] = True
+
+            # Check if email is already processed (countdown)
             if mail in self.remaining_pdfs:
                 self.remaining_pdfs[mail] -= 1
-                if self.remaining_pdfs[mail] == 0:
+                if self.remaining_pdfs[mail] <= 0:
                     del self.remaining_pdfs[mail]
-                    self.move_email(mail, "Invoices", "INBOX", self.imap)
-
-            new_filepath, should_print = return_list
+                    
+                    # Route based on whether any PDF in the email was a valid invoice
+                    if self.valid_invoice_flags.get(mail, False):
+                        self.move_email(mail, "Invoices", "INBOX", self.imap)
+                    else:
+                        self.move_email(mail, "Not_Invoices", "INBOX", self.imap)
+                        
+                    # Clean up the flag from memory
+                    self.valid_invoice_flags.pop(mail, None)
 
             # Check if not invoice
             if new_filepath == "not_invoice":
