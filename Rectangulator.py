@@ -129,22 +129,41 @@ class RectangulatorHandler:
         self.should_save = True
         self.hit_submit = False
         self.invoice = True
+        self.current_page = 0 
 
         # Don't print by default when using scanner
         if scanner:
             self.should_print = False  
 
         self.done_var.set(0)  # reset done variable
-        doc = fitz.open(pdf_path)
-        page = doc[0]
-        pix = page.get_pixmap()
-        img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-        doc.close()
 
-        self.ax.clear()
-        self.ax.imshow(img_array)
-        self.ax.axis("off")
-        self.fig.canvas.draw()
+        self.rectangulator_instance = None
+        doc_temp = fitz.open(pdf_path)
+        self.total_pages = len(doc_temp)
+        doc_temp.close()
+
+        def draw_page(page_num):
+            if page_num < 0 or page_num >= self.total_pages:
+                return
+            doc = fitz.open(pdf_path)
+            page = doc[page_num]
+            pix = page.get_pixmap()
+            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+            doc.close()
+
+            self.ax.clear()
+            self.ax.imshow(img_array)
+            self.ax.axis("off")
+
+            # If user drew rectangles, reset them
+            if self.rectangulator_instance:
+                self.rectangulator_instance.reset_rectangles()
+                self.rectangulator_instance.page_num = page_num
+            
+            self.fig.canvas.draw_idle()
+        
+        draw_page(self.current_page)
+
 
         # Create a Not An Invoice button
         not_inv_button_ax = self.fig.add_axes([0.64, 0.005, 0.18, 0.075])
@@ -264,13 +283,32 @@ class RectangulatorHandler:
             0.925,
             "- Right Click to verify and save, Middle Click to Pan, Scroll to Zoom",
             fontsize=10)
+        
+        # Create next and previous page buttons
+        prev_button_ax = self.fig.add_axes([0.02, 0.45, 0.04, 0.1])
+        prev_button = Button(prev_button_ax, "<")
+        def on_prev(event):
+            if self.current_page > 0:
+                self.current_page -= 1
+                draw_page(self.current_page)
+        prev_button.on_clicked(on_prev)
+
+        next_button_ax = self.fig.add_axes([0.94, 0.45, 0.04, 0.1])
+        next_button = Button(next_button_ax, ">")
+        def on_next(event):
+            if self.current_page < self.total_pages - 1:
+                self.current_page += 1
+                draw_page(self.current_page)
+        next_button.on_clicked(on_next)
 
         self.fig.canvas.draw_idle()
         rectangulator = Rectangulator(self.ax, self.fig, pdf_path, template_folder, self)
+        self.rectangulator_instance = rectangulator
+        rectangulator.page_num = self.current_page
         root.root.wait_variable(self.done_var)  # wait for the user to finish
 
         # Remove the text labels and rectangles
-        for ax in [text_box_ax, not_inv_button_ax, print_checkbox_ax, save_checkbox_ax, submit_button_ax]:
+        for ax in [text_box_ax, not_inv_button_ax, print_checkbox_ax, save_checkbox_ax, submit_button_ax, prev_button_ax, next_button_ax]:
             self.fig.delaxes(ax)
         for label in [text_box_label, instruction_label, instruction_label_2, instruction_label_3, print_label, save_label]:
             label.remove()
@@ -316,7 +354,7 @@ class RectangulatorHandler:
         sanitized_filename = re.sub(r"[^\w_. -]", "", filename.replace("/", "-"))
         return sanitized_filename.strip()
 
-    def get_text_in_rect(self, rect, pdf_path):  # Get the text within a specified rectangle in a PDF document
+    def get_text_in_rect(self, rect, pdf_path, page_num=0):  # Get the text within a specified rectangle in a PDF document
         doc = None
         try:
             # Retrieve the text within the specified rectangle
@@ -325,9 +363,12 @@ class RectangulatorHandler:
             width = float(rect.get_width())
             height = float(rect.get_height())
 
-            # Open the first page of the PDF document and get words
+            # Open the specified page of the PDF document and get words
             doc = fitz.open(pdf_path)
-            page = doc[0]
+            if page_num < 0 or page_num >= len(doc):
+                page = doc[0]  # default to first page if out of bounds
+            else:
+                page = doc[page_num]
             words = page.get_text("words")
 
             # Find words that fall within the specified rectangle
@@ -520,7 +561,7 @@ class Rectangulator:
 
     def rename_pdf(self):  # Rename the PDF based on extracted text from rectangles
         try:
-            extracted_texts = [self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) for rect in self.rectangles]
+            extracted_texts = [self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path, self.page_num) for rect in self.rectangles]
             if len(self.rectangles) == 3 and all(extracted_texts):
                 self.rectangulator_handler.log(f"Creating new template")
                 self.save_template()
@@ -542,7 +583,7 @@ class Rectangulator:
 
     def save_template(self):  # Save the template to a text file
         # Save the template to a text file as Company Name?x?y?width?height and so on
-        company_name = self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path))
+        company_name = self.rectangulator_handler.sanitize_filename(self.rectangulator_handler.get_text_in_rect(self.rectangles[0], self.pdf_path, self.page_num))
         # Check if the file already exists or filename is empty
         if not company_name:
             self.rectangulator_handler.log(f"Filename empty, not creating template")
@@ -552,7 +593,7 @@ class Rectangulator:
         with open(filename, "a") as file:
             for i, coord in enumerate(self.coordinates):
                 x, y, width, height = coord
-                rect_text = self.rectangulator_handler.get_text_in_rect(self.rectangles[i], self.pdf_path)
+                rect_text = self.rectangulator_handler.get_text_in_rect(self.rectangles[i], self.pdf_path, self.page_num)
                 text = f"{rect_text}?{x}?{y}?{width}?{height}\n"
                 if i == 0:  # need to sanitize company name
                     file.write(f"{self.rectangulator_handler.sanitize_filename(rect_text)}?{x}?{y}?{width}?{height}\n")
@@ -703,7 +744,7 @@ class Rectangulator:
         headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
         extracted_text = ""
         for i, rect in enumerate(self.rectangles):
-            extracted_text += (headers[i] + self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path) + "\n")
+            extracted_text += (headers[i] + self.rectangulator_handler.get_text_in_rect(rect, self.pdf_path, self.page_num) + "\n")
         text_is_correct = self.rectangulator_handler.create_alert(
             f"Does the following text match what you selected?\n\n{extracted_text}",
             numbered_buttons=3)
