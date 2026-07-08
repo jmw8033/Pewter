@@ -463,7 +463,7 @@ class EmailProcessor:
             if log:
                 self.log(f"--- Connected to {self.username} --- {self.current_time} {self.current_date}", tag="dgreen",)
             return imap
-        except imaplib.IMAP4.error as e:
+        except Exception as e:
             if log:
                 self.log(f"Unable to connect to {self.username}: {str(e)}", tag="red", send_email=True)
 
@@ -476,6 +476,10 @@ class EmailProcessor:
         except Exception as e:
             if log:
                 self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", send_email=True)
+        finally:
+            self.connected = False
+            if log:
+                self.log(f"--- Disconnected from {self.username} --- {self.current_time} {self.current_date}", tag="red",)
 
     """ 
     Search inbox loops through emails, creates thread for each email to process it by running process_email.
@@ -1163,9 +1167,17 @@ class EmailProcessor:
 
     def reconnect(self):  # Reconnects to email
         self.disconnect(self.imap, log=False)
-        self.imap = self.connect(log=False)
-        self.log(f"Reconnected to {self.username} -- {self.current_time} {self.current_date}", tag="green")
-        self.update_crash_counter_label()
+        self.imap = None
+        
+        # Suspend the email checking loop until connection is actively restored
+        while self.processor_running and not self.imap:
+            self.imap = self.connect(log=False)
+            if self.imap:
+                self.log(f"Reconnected to {self.username} -- {self.current_time} {self.current_date}", tag="green")
+                self.update_crash_counter_label()
+            else:
+                self.log("Reconnect failed, trying again in 30 seconds...", tag="orange")
+                time.sleep(30)
 
     def on_program_exit(self):  # Runs when program is closed, disconnects and closes window
         self.log("Disconnecting...", tag="red")
