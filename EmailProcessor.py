@@ -320,6 +320,7 @@ class EmailProcessor:
                 "RECEIVER_EMAIL": tk.StringVar(value=config["RECEIVER_EMAIL"]),
                 "SCANNER_EMAIL": tk.StringVar(value=config["SCANNER_EMAIL"]),
                 "SPLIT_VENDORS": tk.StringVar(value=config["SPLIT_VENDORS"]),
+                "PREFIX_VENDORS": tk.StringVar(value=config["PREFIX_VENDORS"]),
             }
             for i, (key, var) in enumerate(settings.items()):
                 label = tk.Label(settings_tab, text=key + ":")
@@ -491,9 +492,10 @@ class EmailProcessor:
     """
 
     def search_inbox(self):  # Main Loop, searches inbox for new emails, creates thread to handle each
-        try:
-            cycle_count = 0  # cycle count for reconnecting every hour
-            while self.processor_running:
+        cycle_count = 0  # cycle count for reconnecting every hour
+        
+        while self.processor_running:
+            try:
                 if not self.pause_event.is_set() and self.connected:
                     # Search for all emails in the inbox
                     self.safe_imap(self.imap.select, "INBOX")  # select inbox
@@ -518,26 +520,31 @@ class EmailProcessor:
                         for uid in new_uids:
                             threading.Thread(target=self.process_email, args=(uid,), daemon=True).start()
 
-                    cycle_count += 1
-                    # Reconnect every hour
-                    RECONNECT_CYCLE_COUNT = ceil(config["RECONNECT_TIME"] / config["INBOX_CYCLE_TIME"])
-                    if cycle_count % RECONNECT_CYCLE_COUNT == 0:
-                        self.reconnect()
-                        cycle_count = 0
+                cycle_count += 1
+                # Reconnect every hour
+                RECONNECT_CYCLE_COUNT = ceil(config["RECONNECT_TIME"] / config["INBOX_CYCLE_TIME"])
+                if cycle_count % RECONNECT_CYCLE_COUNT == 0:
+                    self.reconnect()
+                    cycle_count = 0
 
-            # Disconnect when the program is closed
+            except imaplib.IMAP4.abort as e:
+                self.log(f"Search Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
+                self.reconnect()
+            except Exception as e:
+                self.log(f"An error occurred while searching the inbox: {str(e)} \n{traceback.format_exc()}", tag="red", send_email=True)
+                self.reconnect()
+
+        # Logout and cleanup when processor_running is set to False
+        try:
             self.disconnect(self.imap)
-            if self.logging_out:
-                self.logging_out = False
-                self.ui(self.start_button.config, state=tk.NORMAL)
-                self.ui(self.testing_button.config, state=tk.NORMAL)
-                self.ui(self.away_mode_button.config, state=tk.NORMAL)
-        except imaplib.IMAP4.abort as e:
-            self.log(f"Search Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
-            self.logout(reconnect=True)
-        except Exception as e:
-            self.log(f"An error occurred while searching the inbox: {str(e)} \n{traceback.format_exc()}", tag="red", send_email=True)
-            self.reconnect()
+        except Exception:
+            pass
+            
+        if self.logging_out:
+            self.logging_out = False
+            self.ui(self.start_button.config, state=tk.NORMAL)
+            self.ui(self.testing_button.config, state=tk.NORMAL)
+            self.ui(self.away_mode_button.config, state=tk.NORMAL)
 
     def process_email(self, mail):  # Handles each email in own thread created by search_inbox
         subject = ""

@@ -127,6 +127,10 @@ class RectangulatorHandler:
                             # Get the invoice date and number from the invoice
                             invoice_date = self.get_text_in_rect(Rectangle((invoice_date[1], invoice_date[2]), invoice_date[3], invoice_date[4]), pdf_path)
                             invoice_num = self.get_text_in_rect(Rectangle((invoice_num[1], invoice_num[2]), invoice_num[3], invoice_num[4]), pdf_path)
+                            # Get invoice prefix
+                            prefix = self.get_vendor_prefix(identifier)
+                            if prefix:
+                                invoice_num = f"{prefix}{invoice_num}"
                             # Clean the invoice date
                             invoice_date = self.clean_date(invoice_date)
                             return [os.path.join(os.path.dirname(pdf_path), f"{invoice_date}_{invoice_num}.pdf")]
@@ -398,6 +402,19 @@ class RectangulatorHandler:
             if doc:
                 doc.close()
 
+    def get_vendor_prefix(self, identifier):  # Get the prefix for a vendor if it exists in the config
+        # Parses pairs like "VendorA:VA-, VendorB:VB-"
+        prefix_str = self.config.get("PREFIX_VENDORS", "")
+        if not prefix_str:
+            return ""
+            
+        pairs = [p.strip() for p in prefix_str.split(",") if ":" in p]
+        for pair in pairs:
+            vendor, prefix = pair.split(":", 1)
+            if vendor.strip() == identifier.strip():
+                return prefix.strip()
+        return ""
+
     def check_date_outlier(self, invoice_name, invoice_date):  # Check if the date is an outlier and correct it
         calendar = {
             "Jan": "01",
@@ -576,6 +593,12 @@ class Rectangulator:
             if len(self.rectangles) == 3 and all(extracted_texts):
                 self.rectangulator_handler.log(f"Creating new template")
                 self.save_template()
+
+                # Apply vendor prefix if it exists
+                identifier = self.rectangulator_handler.sanitize_filename(extracted_texts[0])
+                prefix = self.rectangulator_handler.get_vendor_prefix(identifier)
+                if prefix:
+                    extracted_texts[2] = f"{prefix}{extracted_texts[2]}"
 
                 # Rename the PDF based on extracted text from rectangles in format "MM-DD-YY_INVOICE_NUMBER"
                 extracted_texts[1] = self.rectangulator_handler.clean_date(extracted_texts[1])  # fix date
