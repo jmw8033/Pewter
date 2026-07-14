@@ -28,7 +28,14 @@ from matplotlib.figure import Figure
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-with open(os.path.join(os.path.dirname(__file__), "config.json")) as f:
+if getattr(sys, 'frozen', False):
+    # If running as a compiled .exe, use the folder containing the .exe
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    # If running as a normal Python script, use the folder containing the script
+    BASE_DIR = os.path.dirname(__file__)
+
+with open(os.path.join(BASE_DIR, "config.json")) as f:
     config = json.load(f)
 
 
@@ -48,12 +55,12 @@ class RedirectText:
 class EmailProcessor:
 
     # CONSTANTS
-    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
-    ICON_PATH = os.path.join(os.path.dirname(__file__), "Hotpot.ico")
+    CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+    ICON_PATH = os.path.join(BASE_DIR, "Hotpot.ico")
     TEMPLATE_FOLDER = config["TEMPLATE_FOLDER"]
     INVOICE_FOLDER = config["INVOICE_FOLDER"]
     EMAIL_ENDING = config["EMAIL_ENDING"]
-    ARCHIVE_DB = os.path.join(os.path.dirname(__file__), "archive.db")
+    ARCHIVE_DB = os.path.join(BASE_DIR, "archive.db")
 
     def __init__(self, username, password):
         try:
@@ -1277,7 +1284,7 @@ class EmailProcessor:
     def save_crash_counter(self): # Overwrites date in config
         try:
             config["LAST_CRASH_DATE"] = self.last_crash_date
-            with open(os.path.join(os.path.dirname(__file__), "config.json"), "w") as f:
+            with open(os.path.join(BASE_DIR, "config.json"), "w") as f:
                 json.dump(config, f, indent=2)
         except Exception as e:
             print(f"-what happened {str(e)}")

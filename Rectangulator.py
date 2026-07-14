@@ -19,12 +19,20 @@ import json
 import time
 import fitz
 import glob
+import sys
 import re
 import os
 
 warnings.simplefilter("ignore", UserWarning)
 
-with open(os.path.join(os.path.dirname(__file__), "config.json")) as f:
+if getattr(sys, 'frozen', False):
+    # If running as a compiled .exe, use the folder containing the .exe
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    # If running as a normal Python script, use the folder containing the script
+    BASE_DIR = os.path.dirname(__file__)
+
+with open(os.path.join(BASE_DIR, "config.json")) as f:
     config = json.load(f)
 
 def get_password(username):
@@ -51,7 +59,7 @@ class RectangulatorHandler:
 
 
     def refresh_config(self):
-        with open(os.path.join(os.path.dirname(__file__), "config.json"), "r") as f:
+        with open(os.path.join(BASE_DIR, "config.json"), "r") as f:
             self.config = json.load(f)
 
     def rectangulate(self, filename, filepath, root, template_folder, testing=False):  # Add a file to the queue, or process it immediately if template exists
