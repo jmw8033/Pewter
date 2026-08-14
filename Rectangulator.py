@@ -45,9 +45,23 @@ def get_password(username):
 
 class RectangulatorHandler:
 
+    # Rendering quality knobs. The visible region is re-rendered by PyMuPDF at
+    # roughly the canvas's own pixel resolution, so text stays sharp no matter
+    # how far you zoom in. SUPERSAMPLE > 1 renders extra detail so small zoom
+    # steps don't each need a fresh render.
+    SUPERSAMPLE = 2.0
+    MAX_RENDER_ZOOM = 16.0
+    MAX_RENDER_PIXELS = 16_000_000
+
     def __init__(self, root, fig, ax):
         self.queue = []
         self.invoice = True
+        self.pdf_path = None
+        self.page_rect = None
+        self.page_image = None
+        self.current_page = 0
+        self.total_pages = 1
+        self._render_job = None
         self.should_print = True
         self.should_save = True
         self.hit_submit = False
@@ -161,6 +175,10 @@ class RectangulatorHandler:
         self.done_var.set(0)  # reset done variable
 
         self.rectangulator_instance = None
+        self.pdf_path = pdf_path
+        self.page_image = None
+        self.page_rect = None
+        self._render_job = None
         doc_temp = fitz.open(pdf_path)
         self.total_pages = len(doc_temp)
         doc_temp.close()
@@ -168,23 +186,28 @@ class RectangulatorHandler:
         def draw_page(page_num):
             if page_num < 0 or page_num >= self.total_pages:
                 return
-            doc = fitz.open(pdf_path)
-            page = doc[page_num]
-            pix = page.get_pixmap()
-            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-            doc.close()
 
-            self.ax.clear()
-            self.ax.imshow(img_array)
-            self.ax.axis("off")
-
-            # If user drew rectangles, reset them
+            # Clear rectangles BEFORE wiping the axes, otherwise reset_rectangles
+            # tries to remove patches matplotlib has already discarded.
             if self.rectangulator_instance:
                 self.rectangulator_instance.reset_rectangles()
                 self.rectangulator_instance.page_num = page_num
-            
-            self.fig.canvas.draw_idle()
-        
+
+            doc = fitz.open(pdf_path)
+            page = doc[page_num]
+            self.page_rect = fitz.Rect(page.rect)
+            doc.close()
+
+            self.current_page = page_num
+            self.ax.clear()
+            self.page_image = None
+            self.ax.axis("off")
+
+            # Full page view. Data coordinates are PDF points, not image pixels.
+            self.render_view(xlim=(self.page_rect.x0, self.page_rect.x1),
+                             ylim=(self.page_rect.y1, self.page_rect.y0))
+
+        self.draw_page = draw_page
         draw_page(self.current_page)
 
 
@@ -343,6 +366,77 @@ class RectangulatorHandler:
         self.fig.canvas.draw_idle()
 
         return rectangulator, text_box
+
+    def render_view(self, xlim=None, ylim=None):
+        # Re-render only the visible slice of the page, at the resolution the
+        # canvas can actually display. The image is placed with an extent
+        # measured in PDF points, so axes data coordinates always match
+        # page.get_text("words") output -- existing templates keep working.
+        if self.page_rect is None or not self.pdf_path:
+            return
+        doc = None
+        try:
+            if xlim is None:
+                xlim = self.ax.get_xlim()
+            if ylim is None:
+                ylim = self.ax.get_ylim()
+            x0, x1 = sorted(xlim)
+            y0, y1 = sorted(ylim)
+
+            clip = fitz.Rect(x0, y0, x1, y1) & self.page_rect
+            if clip.is_empty or clip.width <= 0 or clip.height <= 0:
+                return
+
+            # Points-to-screen-pixels scale for the current view
+            bbox = self.ax.get_window_extent()
+            scale = min(max(bbox.width, 1.0) / clip.width,
+                        max(bbox.height, 1.0) / clip.height)
+            zoom = max(1.0, min(scale * self.SUPERSAMPLE, self.MAX_RENDER_ZOOM))
+
+            # Keep the bitmap within a sane memory budget
+            pixels = (clip.width * zoom) * (clip.height * zoom)
+            if pixels > self.MAX_RENDER_PIXELS:
+                zoom *= (self.MAX_RENDER_PIXELS / pixels) ** 0.5
+
+            doc = fitz.open(self.pdf_path)
+            page = doc[min(max(self.current_page, 0), len(doc) - 1)]
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+
+            # pix.irect is in the zoomed space; divide back into PDF points.
+            # Indexed rather than .x0/.y0 -- some PyMuPDF versions return a tuple.
+            ir = tuple(pix.irect)
+            extent = [ir[0] / zoom, ir[2] / zoom, ir[3] / zoom, ir[1] / zoom]
+
+            if self.page_image is None:
+                self.page_image = self.ax.imshow(img_array, extent=extent)
+                self.ax.axis("off")
+            else:
+                self.page_image.set_data(img_array)
+                self.page_image.set_extent(extent)
+                # set_extent can rescale the axes; restore the user's view
+                self.ax.set_xlim(xlim)
+                self.ax.set_ylim(ylim)
+            self.fig.canvas.draw_idle()
+        except Exception as e:
+            self.log(f"Error rendering page view: {str(e)} \n{traceback.format_exc()}")
+        finally:
+            if doc:
+                doc.close()
+
+    def schedule_render(self, delay=120):
+        # Coalesce bursts of scroll / pan / resize events into one re-render
+        try:
+            tk_root = self.root.root
+            if self._render_job is not None:
+                tk_root.after_cancel(self._render_job)
+            self._render_job = tk_root.after(delay, self._run_scheduled_render)
+        except Exception:
+            self.render_view()
+
+    def _run_scheduled_render(self):
+        self._render_job = None
+        self.render_view()
 
     def print_invoice(self, filepath):  # Printer
         try:
@@ -593,7 +687,8 @@ class Rectangulator:
         cid3 = self.ax.figure.canvas.mpl_connect("motion_notify_event", self.on_move)
         cid4 = self.ax.figure.canvas.mpl_connect("scroll_event", self.on_scroll)
         cid5 = self.ax.figure.canvas.mpl_connect("key_press_event", self.on_key_press)
-        self.cids.extend([cid1, cid2, cid3, cid4, cid5])
+        cid6 = self.ax.figure.canvas.mpl_connect("resize_event", self.on_resize)
+        self.cids.extend([cid1, cid2, cid3, cid4, cid5, cid6])
 
     def rename_pdf(self):  # Rename the PDF based on extracted text from rectangles
         try:
@@ -645,10 +740,19 @@ class Rectangulator:
 
     def on_key_press(self, event):  # Handle key press events
         if event.key == "escape":  # reset zoom and position
-            self.ax.set_xlim(self.initial_xlim)
-            self.ax.set_ylim(self.initial_ylim)
+            page_rect = getattr(self.rectangulator_handler, "page_rect", None)
+            if page_rect is not None:
+                self.ax.set_xlim(page_rect.x0, page_rect.x1)
+                self.ax.set_ylim(page_rect.y1, page_rect.y0)
+            else:
+                self.ax.set_xlim(self.initial_xlim)
+                self.ax.set_ylim(self.initial_ylim)
             self.pan_start = None
             self.ax.figure.canvas.draw()
+            self.rectangulator_handler.schedule_render(delay=0)
+
+    def on_resize(self, event):  # Re-render to match the new canvas resolution
+        self.rectangulator_handler.schedule_render(delay=250)
 
     def on_button_press(
             self, event):  # Handle left and right mouse button press events
@@ -693,16 +797,21 @@ class Rectangulator:
             self.pan_start = None
             self.prev_x = None
             self.prev_y = None
+            self.rectangulator_handler.schedule_render()
 
     def on_move(self, event):  # Continuously update drawn rectangles
         # Pan if middle mouse button is pressed
         if event.button == 2 and self.pan_start:
             if self.prev_x is not None and self.prev_y is not None:
-                dx = (event.x - self.prev_x) * self.pan_factor
-                dy = (event.y - self.prev_y) * self.pan_factor
-
                 xlim = self.ax.get_xlim()
                 ylim = self.ax.get_ylim()
+
+                # Convert screen pixels to data units so panning tracks the
+                # cursor at any zoom level instead of drifting
+                bbox = self.ax.get_window_extent()
+                scale = abs(xlim[1] - xlim[0]) / max(bbox.width, 1.0)
+                dx = (event.x - self.prev_x) * scale * self.pan_factor
+                dy = (event.y - self.prev_y) * scale * self.pan_factor
                 new_xlim = xlim[0] - dx, xlim[1] - dx
                 new_ylim = ylim[0] + dy, ylim[1] + dy
 
@@ -774,6 +883,8 @@ class Rectangulator:
         self.ax.set_xlim(new_xlim)
         self.ax.set_ylim(new_ylim)
         self.ax.figure.canvas.draw()
+        # Re-render the newly visible region at full detail
+        self.rectangulator_handler.schedule_render()
 
     def verify_selection(self):
         if self.correcting_rect_index is not None:

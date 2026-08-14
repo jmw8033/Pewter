@@ -84,7 +84,16 @@ class EmailProcessor:
             # GUI
             self.root = tk.Tk()
             self.root.iconbitmap(self.ICON_PATH)
-            self.root.geometry("1400x700")
+            # Size relative to the actual screen, then start maximized so the
+            # rectangulator pane gets as much vertical room as possible.
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            self.root.geometry(f"{int(screen_w * 0.95)}x{int(screen_h * 0.90)}+0+0")
+            self.root.minsize(1100, 650)
+            try:
+                self.root.state("zoomed")  # Windows / most Linux WMs
+            except tk.TclError:
+                pass
             self.root.title(f"{username.upper()} Pewter")
             style = ttk.Style(self.root)
             style.theme_use("clam")
@@ -101,10 +110,19 @@ class EmailProcessor:
             self.alert_container = tk.Frame(program_tab, relief="raised") # container for alert popup
             self.alert_container.place(relx=0.5, rely=0.5, anchor=tk.CENTER)  
             self.alert_container.lower()  # hide initially
-            right_frame = tk.Frame(program_tab)
-            right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-            left_frame = tk.Frame(program_tab)
-            left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            # Draggable sash: grab the divider to trade console width for PDF width.
+            # stretch="never" on the left pane means every pixel gained by
+            # maximizing the window goes to the rectangulator canvas.
+            self.main_paned = tk.PanedWindow(program_tab,
+                                             orient=tk.HORIZONTAL,
+                                             sashwidth=6,
+                                             sashrelief="raised",
+                                             opaqueresize=False)
+            self.main_paned.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            left_frame = tk.Frame(self.main_paned)
+            right_frame = tk.Frame(self.main_paned)
+            self.main_paned.add(left_frame, minsize=420, stretch="never")
+            self.main_paned.add(right_frame, minsize=520, stretch="always")
 
             # Button Frame
             button_frame = tk.Frame(left_frame)  # frame for buttons
@@ -236,8 +254,8 @@ class EmailProcessor:
             self.log_text_widget = tk.Text( # text box for logging
                 left_frame,
                 yscrollcommand=scrollbar.set,
-                height=30,
-                width=140,
+                height=12,
+                width=60,
                 spacing1=4,
                 padx=0,
                 pady=0,
@@ -247,8 +265,12 @@ class EmailProcessor:
 
 
             # Plot canvas for rectangulator
-            self.figure = Figure(figsize=(6.75, 6), dpi=100)
+            self.figure = Figure(figsize=(9, 9.5), dpi=100)
             self.ax = self.figure.add_subplot(111)
+            # Reclaim matplotlib's default margins; the axis is hidden anyway.
+            # top=0.90 leaves room for the instruction labels drawn at 0.925-0.975,
+            # bottom=0.11 for the text box / buttons drawn at 0.005-0.08.
+            self.figure.subplots_adjust(left=0.05, right=0.95, top=0.90, bottom=0.11)
             self.ax.axis("off")
             self.canvas = FigureCanvasTkAgg(self.figure, master=right_frame)
             self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH,expand=True)
@@ -451,7 +473,7 @@ class EmailProcessor:
     class IMAPUnavailable(Exception):
         pass
 
-    def safe_imap(self, func, *args, retries=3, **kwargs):
+    def safe_imap(self, func, *args, retries=3, log_errors=True, **kwargs):
         last = None
         for attempt in range(retries):
             try:
@@ -460,9 +482,17 @@ class EmailProcessor:
             except (imaplib.IMAP4.abort, TimeoutError, socket.gaierror,
                     ssl.SSLError, OSError) as e:
                 last = e
-                self.log(f"IMAP error (attempt {attempt+1}/{retries}): {e}", tag="red")
                 time.sleep(min(2 ** attempt, 10))  # 1s, 2s, 4s...
+        if log_errors:
+            self.log(f"IMAP dropped ({self.brief_error(last)}) - reconnecting",
+                    tag="orange", console=True)
         raise self.IMAPUnavailable(str(last))
+
+    def brief_error(self, e):  # Shortens noisy socket/SSL errors for the console
+        msg = str(e)
+        if "EOF occurred in violation of protocol" in msg:
+            return "socket EOF"
+        return msg.split("(")[0].strip()[:80]
 
     def connect(self, log=True):  # Connects email, returns imap object
         user = f"{self.username}.sndex@gmail.com"
@@ -480,7 +510,7 @@ class EmailProcessor:
 
     def disconnect(self, imap, log=True):  # Disconnects email
         try:
-            self.safe_imap(imap.logout)  # safely logout
+            self.safe_imap(imap.logout, retries=1, log_errors=False)  # safely logout
             self.connected = False
             if log:
                 self.log(f"--- Disconnected from {self.username} --- {self.current_time} {self.current_date}", tag="red",)
@@ -534,6 +564,8 @@ class EmailProcessor:
                     self.reconnect()
                     cycle_count = 0
 
+            except self.IMAPUnavailable:
+                self.reconnect()
             except imaplib.IMAP4.abort as e:
                 self.log(f"Search Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
                 self.reconnect()
@@ -604,6 +636,7 @@ class EmailProcessor:
             self.log(f"Email not found (handle_attachments): {mail}", tag="red", send_email=True)
             return
         filenames = []
+        pending = []  # (filename, filepath) queued only after remaining_pdfs is set
 
         for part in msg.walk():
             if (part.get_filename() not in filenames
@@ -654,17 +687,11 @@ class EmailProcessor:
                             new_doc.close()
 
                             filenames.append(new_filename)
-                            if subject == "Test":
-                                self.add_to_queue(mail, subject, new_filename, new_filepath, testing="test")
-                            elif self.TESTING:
-                                self.add_to_queue(mail, subject, new_filename, new_filepath, testing=True)
-                            elif sender_email == config["SCANNER_EMAIL"]:
-                                self.add_to_queue(mail, subject, new_filename, new_filepath, testing="scanner")
-                            else:
-                                self.add_to_queue(mail, subject, new_filename, new_filepath)
+                            pending.append((new_filename, new_filepath))
 
                         doc.close()
                         os.remove(filepath)  # remove original split pdf
+                        template_exists = None  # reset template_exists to None to avoid processing the original file
                         continue  # skip the rest of the loop for this email
 
 
@@ -686,22 +713,33 @@ class EmailProcessor:
                 else:  
                     self.root.after(0, self.flash_taskbar)  # flash taskbar if new email
                     filenames.append(filename)
-                    if subject == "Test":
-                        self.add_to_queue(mail, subject, filename, filepath, testing="test")
-                    elif self.TESTING:
-                        self.add_to_queue(mail, subject, filename, filepath, testing=True)
-                    elif sender_email == config["SCANNER_EMAIL"]:
-                        self.add_to_queue(mail, subject, filename, filepath, testing="scanner")
-                    else:
-                        self.add_to_queue(mail, subject, filename, filepath)
-        self.remaining_pdfs[mail] = len(filenames)
+                    pending.append((filename, filepath))
 
-        if len(filenames) == 0:
+        # Register the counter BEFORE anything is queued. A templated PDF can finish
+        # in milliseconds, and if remaining_pdfs[mail] does not exist yet that
+        # decrement is silently lost and the email never leaves the inbox.
+        self.remaining_pdfs[mail] = len(pending)
+
+        mode = self.queue_testing_mode(subject, sender_email)
+        for queued_name, queued_path in pending:
+            self.add_to_queue(mail, subject, queued_name, queued_path, testing=mode)
+
+        if not pending:
+            self.remaining_pdfs.pop(mail, None)
             if self.valid_invoice_flags.get(mail, False):
                 self.move_email(mail, "Invoices", "INBOX", self.imap)
             else:
                 self.move_email(mail, "Not_Invoices", "INBOX", self.imap)
             self.valid_invoice_flags.pop(mail, None)
+
+    def queue_testing_mode(self, subject, sender_email):  # Which testing flag add_to_queue should get
+        if subject == "Test":
+            return "test"
+        elif self.TESTING:
+            return True
+        elif sender_email == config["SCANNER_EMAIL"]:
+            return "scanner"
+        return False
 
     def add_to_queue(self, mail, subject, filename, filepath, testing=False):  # Adds invoices to queue, ran by handle_attachments
         try:
@@ -758,6 +796,7 @@ class EmailProcessor:
             self.root.after(100, self.process_queue)  # Schedule the next check of the queue
 
     def handle_rectangulator(self, mail, filename, filepath, testing):  # Handles rectangulator
+        counted = False
         try:
             inbox_item_id = f"{mail}_{filename}"
 
@@ -781,17 +820,8 @@ class EmailProcessor:
                     # Set flag and count down instead of moving immediately ---
                     self.valid_invoice_flags[mail] = True
 
-                    if mail in self.remaining_pdfs:
-                        self.remaining_pdfs[mail] -= 1
-                        if self.remaining_pdfs[mail] <= 0:
-                            del self.remaining_pdfs[mail]
-                            
-                            if self.valid_invoice_flags.get(mail, False):
-                                self.move_email(mail, "Invoices", "INBOX", self.imap)
-                            else:
-                                self.move_email(mail, "Not_Invoices", "INBOX", self.imap)
-                                
-                            self.valid_invoice_flags.pop(mail, None)
+                    self.finish_pdf(mail)
+                    counted = True
                     
                     self.gui_busy = False # Free the queue
                     return
@@ -802,6 +832,9 @@ class EmailProcessor:
             # If away mode do nothing
             if self.AWAY_MODE:
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", f"Away Mode - {filename}", "None"))
+                counted = True  # leave the email in INBOX to be handled manually later
+                self.remaining_pdfs.pop(mail, None)
+                self.valid_invoice_flags.pop(mail, None)
                 return
 
             # Check if Rectangulator fails
@@ -811,6 +844,9 @@ class EmailProcessor:
                     os.remove(filepath)
                 self.log(f"Failed to download '{filename}', moved to Error label, not printed", tag="red", send_email=True)
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Rectangulating"))
+                counted = True
+                self.remaining_pdfs.pop(mail, None)
+                self.valid_invoice_flags.pop(mail, None)
                 return
 
             # Check if test email
@@ -820,6 +856,9 @@ class EmailProcessor:
                 if os.path.exists(filepath):
                     os.remove(filepath)
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Test Email", "None"))
+                counted = True
+                self.remaining_pdfs.pop(mail, None)
+                self.valid_invoice_flags.pop(mail, None)
                 return
 
             new_filepath, should_print = return_list
@@ -827,21 +866,6 @@ class EmailProcessor:
             # If this specific PDF is an invoice, flag the email as containing an invoice
             if new_filepath != "not_invoice":
                 self.valid_invoice_flags[mail] = True
-
-            # Check if email is already processed (countdown)
-            if mail in self.remaining_pdfs:
-                self.remaining_pdfs[mail] -= 1
-                if self.remaining_pdfs[mail] <= 0:
-                    del self.remaining_pdfs[mail]
-                    
-                    # Route based on whether any PDF in the email was a valid invoice
-                    if self.valid_invoice_flags.get(mail, False):
-                        self.move_email(mail, "Invoices", "INBOX", self.imap)
-                    else:
-                        self.move_email(mail, "Not_Invoices", "INBOX", self.imap)
-                        
-                    # Clean up the flag from memory
-                    self.valid_invoice_flags.pop(mail, None)
 
             # Check if not invoice
             if new_filepath == "not_invoice":
@@ -853,7 +877,9 @@ class EmailProcessor:
                 if not should_save:
                     self.log(f"{os.path.basename(new_filepath)} marked not an invoice and not saved -- {self.current_time} {self.current_date}", tag="purple")
                     os.remove(filepath)
-                    self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Not Invoice", "None"))     
+                    self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Not Invoice", "None"))
+                    self.finish_pdf(mail)
+                    counted = True
                     return
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Not Invoice", new_filepath))
                 self.log(f"{os.path.basename(new_filepath)} marked not an invoice and saved -- {self.current_time} {self.current_date}", tag="purple")
@@ -873,8 +899,27 @@ class EmailProcessor:
             self.log(f"Created new invoice file {os.path.basename(new_filepath)} -- {self.current_date} {self.current_time}", tag="lgreen")
             if should_print:
                 self.print_invoice(new_filepath, inbox_item_id)
+
+            # Count down only once the file is safely on disk
+            self.finish_pdf(mail)
+            counted = True
+        except Exception as e:
+            self.log(f"Rectangulator failed for '{filename}': {e} \n{traceback.format_exc()}", tag="red", send_email=True)
         finally:
+            if not counted:
+                self.finish_pdf(mail)
             self.gui_busy = False
+
+    def finish_pdf(self, mail):  # Count off one finished PDF, move the email when all parts are done
+        if mail not in self.remaining_pdfs:
+            return
+        self.remaining_pdfs[mail] -= 1
+        if self.remaining_pdfs[mail] > 0:
+            return
+        del self.remaining_pdfs[mail]
+        label = "Invoices" if self.valid_invoice_flags.get(mail, False) else "Not_Invoices"
+        self.valid_invoice_flags.pop(mail, None)
+        self.move_email(mail, label, "INBOX", self.imap)
 
     def remove_inbox_item(self, log=True):  # Removes inbox item on double click and adds to archive
         # Only if item has finished tag
@@ -1046,7 +1091,7 @@ class EmailProcessor:
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Printing"))
             return False
 
-    def log(self, *args, tag=None, send_email=False, write=True):
+    def log(self, *args, tag=None, send_email=False, write=True, console=True):
         message = " ".join(str(a) for a in args)
 
         # Disk + network are thread-safe; do them here.
@@ -1060,6 +1105,8 @@ class EmailProcessor:
             threading.Thread(target=self.send_email, args=(message,), daemon=True).start()
 
         # Widget access must run on the main thread.
+        if not console:
+            return
         try:
             self.root.after(0, self._log_to_widget, message, tag)
         except (RuntimeError, tk.TclError):
