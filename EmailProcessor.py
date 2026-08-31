@@ -304,7 +304,12 @@ class EmailProcessor:
             self.archive.bind("<Double-1>", self.open_archive_item)  # double click to open archive item
             self.archive.bind("<Double-Button-3>", self.remove_archive_item)  # double right click to remove archive item
             self.archive.bind("<Button-2>", self.print_archive_item) # middle click to print archive item
-            self.archive.pack(fill=tk.BOTH, expand=True)
+            self.archive.pack(side="left", fill="both", expand=True)
+            self.archive_scrollbar = ttk.Scrollbar(archive_tab,
+                                                   orient="vertical",
+                                                   command = self.archive.yview)
+            self.archive_scrollbar.pack(side="right", fill="y")
+            self.archive.configure(yscrollcommand=self.archive_scrollbar.set)
 
             # Load archive from database
             self.db = sqlite3.connect(self.ARCHIVE_DB)
@@ -982,7 +987,12 @@ class EmailProcessor:
         self.db.commit()
 
     def load_archive(self):  # Loads archive from database
-        for row in self.db.execute("SELECT * FROM archive ORDER BY datestamp DESC"):
+        values = []
+        for row in self.db.execute("SELECT * FROM archive"):
+            values.append(row)
+        print(values)
+        values.sort(key=lambda x: datetime.strptime(x[2], "%m-%d-%Y")  if x[2] else datetime(2000, 1, 1), reverse=True)
+        for row in values:
             self.archive.insert("", "end", iid=row[0], values=row[1:])
 
     def open_archive_item(self, event):  # Opens archive item on double click
