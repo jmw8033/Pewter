@@ -3,7 +3,11 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
 from math import ceil
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import threading
+import hashlib
+import shutil
 import traceback
 import win32print
 import win32gui
@@ -11,8 +15,6 @@ import win32api
 import socket
 import json
 import ssl
-import random
-import string
 import imaplib
 import smtplib
 import sqlite3
@@ -39,6 +41,32 @@ with open(os.path.join(BASE_DIR, "config.json")) as f:
     config = json.load(f)
 
 
+# Add new settings without breaking existing config files. Missing values are
+# persisted immediately so they also appear in config.json for external editing.
+_template_parent = os.path.dirname(str(config.get("TEMPLATE_FOLDER", "") or "")) or BASE_DIR
+_test_template_parent = os.path.dirname(str(config.get("TEST_TEMPLATE_FOLDER", "") or "")) or BASE_DIR
+_CONFIG_DEFAULTS = {
+    "OCR_TEMPLATE_FOLDER": os.path.join(_template_parent, "OCR_Templates"),
+    "TEST_OCR_TEMPLATE_FOLDER": os.path.join(_test_template_parent, "OCR_Templates"),
+    "OCR_FUZZY_THRESHOLD": 0.72,
+    "OCR_DPI": 250,
+    "OCR_LANGUAGE": "eng",
+    "TESSDATA_PREFIX": "",
+    "PRINTER_NAME": "",                 # blank = Windows default printer
+    "EMAIL_WORKERS": 3,
+    "NO_PDF_LABEL": "Not_Invoices",
+    "MIN_EMBEDDED_TEXT_CHARS": 40,
+}
+_config_changed = False
+for _key, _value in _CONFIG_DEFAULTS.items():
+    if _key not in config:
+        config[_key] = _value
+        _config_changed = True
+if _config_changed:
+    with open(os.path.join(BASE_DIR, "config.json"), "w", encoding="utf-8") as _f:
+        json.dump(config, _f, indent=2)
+
+
 class RedirectText:
 
     def __init__(self, text_widget):
@@ -58,6 +86,7 @@ class EmailProcessor:
     CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
     ICON_PATH = os.path.join(BASE_DIR, "Hotpot.ico")
     TEMPLATE_FOLDER = config["TEMPLATE_FOLDER"]
+    OCR_TEMPLATE_FOLDER = config["OCR_TEMPLATE_FOLDER"]
     INVOICE_FOLDER = config["INVOICE_FOLDER"]
     EMAIL_ENDING = config["EMAIL_ENDING"]
     ARCHIVE_DB = os.path.join(BASE_DIR, "archive.db")
@@ -80,6 +109,8 @@ class EmailProcessor:
             self.current_emails_lock = threading.Lock()  # lock for current_emails
             self.remaining_pdfs = {}  # set of pdfs that are still being processed per uid
             self.valid_invoice_flags = {} # dictionary to track if an invoice is valid per uid
+            self.state_lock = threading.RLock()
+            self.email_executor = None
 
             # GUI
             self.root = tk.Tk()
@@ -283,6 +314,10 @@ class EmailProcessor:
             # Archive tab
             archive_tab = tk.Frame(notebook)
             notebook.add(archive_tab, text="Archive")
+            archive_controls = tk.Frame(archive_tab)
+            archive_controls.pack(side=tk.TOP, fill=tk.X, pady=2)
+            tk.Button(archive_controls, text="Reprocess Selected", command=self.reprocess_archive_item).pack(side=tk.LEFT, padx=2)
+            tk.Button(archive_controls, text="Open File", command=lambda: self.open_archive_item(None)).pack(side=tk.LEFT, padx=2)
             self.archive = ttk.Treeview(archive_tab,
                                         columns=("Subject", "Date", "Invoice", "Saved", "Printed", "Errors", "Filepath"),
                                         show="headings",
@@ -323,6 +358,16 @@ class EmailProcessor:
                      errors   TEXT,
                      filepath TEXT
                    )""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS document_history (
+                         sha256       TEXT PRIMARY KEY,
+                         is_invoice   INTEGER NOT NULL DEFAULT 1,
+                         saved        INTEGER NOT NULL DEFAULT 0,
+                         printed      INTEGER NOT NULL DEFAULT 0,
+                         final_name   TEXT,
+                         filepath     TEXT,
+                         first_seen   TEXT NOT NULL,
+                         last_seen    TEXT NOT NULL
+                       )""")
             self.db.commit()
             self.load_archive()  # Load archive from database
             
@@ -342,22 +387,33 @@ class EmailProcessor:
             settings_tab = tk.Frame(notebook)
             notebook.add(settings_tab, text="Settings")
             settings = {
-                "APC_USER": tk.StringVar(value=config["APC_USER"]),
-                "LOG_FILE": tk.StringVar(value=config["LOG_FILE"]),
-                "INVOICE_FOLDER": tk.StringVar(value=config["INVOICE_FOLDER"]),
-                "TEMPLATE_FOLDER": tk.StringVar(value=config["TEMPLATE_FOLDER"]),
-                "TEST_INVOICE_FOLDER": tk.StringVar(value=config["TEST_INVOICE_FOLDER"]),
-                "TEST_TEMPLATE_FOLDER": tk.StringVar(value=config["TEST_TEMPLATE_FOLDER"]),
-                "TEST_INVOICE": tk.StringVar(value=config["TEST_INVOICE"]),
-                "INBOX_CYCLE_TIME": tk.IntVar(value=config["INBOX_CYCLE_TIME"]),
-                "RECONNECT_TIME": tk.IntVar(value=config["RECONNECT_TIME"]),
-                "RECEIVER_EMAIL": tk.StringVar(value=config["RECEIVER_EMAIL"]),
-                "SCANNER_EMAIL": tk.StringVar(value=config["SCANNER_EMAIL"]),
-                "SPLIT_VENDORS": tk.StringVar(value=config["SPLIT_VENDORS"]),
-                "PREFIX_VENDORS": tk.StringVar(value=config["PREFIX_VENDORS"]),
+                "APC_USER": tk.StringVar(value=config.get("APC_USER", "")),
+                "LOG_FILE": tk.StringVar(value=config.get("LOG_FILE", "")),
+                "INVOICE_FOLDER": tk.StringVar(value=config.get("INVOICE_FOLDER", "")),
+                "TEMPLATE_FOLDER": tk.StringVar(value=config.get("TEMPLATE_FOLDER", "")),
+                "OCR_TEMPLATE_FOLDER": tk.StringVar(value=config.get("OCR_TEMPLATE_FOLDER", "")),
+                "TEST_INVOICE_FOLDER": tk.StringVar(value=config.get("TEST_INVOICE_FOLDER", "")),
+                "TEST_TEMPLATE_FOLDER": tk.StringVar(value=config.get("TEST_TEMPLATE_FOLDER", "")),
+                "TEST_OCR_TEMPLATE_FOLDER": tk.StringVar(value=config.get("TEST_OCR_TEMPLATE_FOLDER", "")),
+                "TEST_INVOICE": tk.StringVar(value=config.get("TEST_INVOICE", "")),
+                "INBOX_CYCLE_TIME": tk.IntVar(value=config.get("INBOX_CYCLE_TIME", 30)),
+                "RECONNECT_TIME": tk.IntVar(value=config.get("RECONNECT_TIME", 3600)),
+                "RECEIVER_EMAIL": tk.StringVar(value=config.get("RECEIVER_EMAIL", "")),
+                "SCANNER_EMAIL": tk.StringVar(value=config.get("SCANNER_EMAIL", "")),
+                "SPLIT_VENDORS": tk.StringVar(value=config.get("SPLIT_VENDORS", "")),
+                "PREFIX_VENDORS": tk.StringVar(value=config.get("PREFIX_VENDORS", "")),
+                "PRINTER_NAME": tk.StringVar(value=config.get("PRINTER_NAME", "")),
+                "OCR_FUZZY_THRESHOLD": tk.DoubleVar(value=config.get("OCR_FUZZY_THRESHOLD", 0.72)),
+                "OCR_DPI": tk.IntVar(value=config.get("OCR_DPI", 250)),
+                "OCR_LANGUAGE": tk.StringVar(value=config.get("OCR_LANGUAGE", "eng")),
+                "TESSDATA_PREFIX": tk.StringVar(value=config.get("TESSDATA_PREFIX", "")),
+                "EMAIL_WORKERS": tk.IntVar(value=config.get("EMAIL_WORKERS", 3)),
+                "NO_PDF_LABEL": tk.StringVar(value=config.get("NO_PDF_LABEL", "Not_Invoices")),
+                "MIN_EMBEDDED_TEXT_CHARS": tk.IntVar(value=config.get("MIN_EMBEDDED_TEXT_CHARS", 40)),
             }
             for i, (key, var) in enumerate(settings.items()):
-                label = tk.Label(settings_tab, text=key + ":")
+                display_key = "PRINTER_NAME (blank = Windows default)" if key == "PRINTER_NAME" else key
+                label = tk.Label(settings_tab, text=display_key + ":")
                 label.grid(row=i, column=0, padx=5, pady=5, sticky=tk.W)
                 entry = tk.Entry(settings_tab, textvariable=var, width=100)
                 entry.grid(row=i, column=1, padx=5, pady=5, sticky=tk.W)
@@ -366,16 +422,60 @@ class EmailProcessor:
                 # Saves settings to config.py
                 try:
                     new_values = {key: var.get() for key, var in settings.items()}
+                    threshold = float(new_values.get("OCR_FUZZY_THRESHOLD", 0.72))
+                    if not 0.0 <= threshold <= 1.0:
+                        raise ValueError("OCR_FUZZY_THRESHOLD must be between 0.0 and 1.0")
+                    if int(new_values.get("OCR_DPI", 250)) < 72:
+                        raise ValueError("OCR_DPI must be at least 72")
+                    if not 1 <= int(new_values.get("EMAIL_WORKERS", 3)) <= 10:
+                        raise ValueError("EMAIL_WORKERS must be between 1 and 10")
+                    if int(new_values.get("MIN_EMBEDDED_TEXT_CHARS", 40)) < 1:
+                        raise ValueError("MIN_EMBEDDED_TEXT_CHARS must be at least 1")
                     config.update(new_values)
                     to_write = {k: v for k, v in config.items()}
                     with open(self.CONFIG_PATH, "w", encoding="utf-8") as f:
                         json.dump(to_write, f, indent=2)
+                    self.TEMPLATE_FOLDER = config.get("TEMPLATE_FOLDER", self.TEMPLATE_FOLDER)
+                    self.OCR_TEMPLATE_FOLDER = config.get("OCR_TEMPLATE_FOLDER", self.OCR_TEMPLATE_FOLDER)
+                    self.INVOICE_FOLDER = config.get("INVOICE_FOLDER", self.INVOICE_FOLDER)
+                    for folder_key in ("TEMPLATE_FOLDER", "OCR_TEMPLATE_FOLDER", "INVOICE_FOLDER"):
+                        folder = str(config.get(folder_key, "") or "").strip()
+                        if folder:
+                            os.makedirs(folder, exist_ok=True)
                     self.rectangulator_handler.refresh_config()
+                    self.refresh_template_manager()
                     messagebox.showinfo("Settings", "Settings saved successfully.")
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to save settings: {e}")
             save_button = tk.Button(settings_tab, text="Save Settings", command=save_settings)
             save_button.grid(row=len(settings), column=0, columnspan=2, pady=10)
+            tk.Button(settings_tab, text="Open Text Templates", command=lambda: self.open_folder(config.get("TEMPLATE_FOLDER", ""))).grid(row=len(settings)+1, column=0, pady=5)
+            tk.Button(settings_tab, text="Open OCR Templates", command=lambda: self.open_folder(config.get("OCR_TEMPLATE_FOLDER", ""))).grid(row=len(settings)+1, column=1, pady=5, sticky=tk.W)
+
+            # Template Manager tab. Existing .txt templates remain readable;
+            # new native/OCR templates are JSON and can be inspected or removed here.
+            template_tab = tk.Frame(notebook)
+            notebook.add(template_tab, text="Template Manager")
+            template_controls = tk.Frame(template_tab)
+            template_controls.pack(side=tk.TOP, fill=tk.X, pady=2)
+            tk.Button(template_controls, text="Refresh", command=self.refresh_template_manager).pack(side=tk.LEFT, padx=2)
+            tk.Button(template_controls, text="Open Selected", command=self.open_template_item).pack(side=tk.LEFT, padx=2)
+            tk.Button(template_controls, text="Delete Selected", command=self.delete_template_item).pack(side=tk.LEFT, padx=2)
+            self.template_tree = ttk.Treeview(
+                template_tab, columns=("Type", "Vendor", "File"), show="headings")
+            self.template_tree.heading("Type", text="Type")
+            self.template_tree.heading("Vendor", text="Vendor")
+            self.template_tree.heading("File", text="File")
+            self.template_tree.column("Type", width=100, anchor="center")
+            self.template_tree.column("Vendor", width=220, anchor="w")
+            self.template_tree.column("File", width=600, anchor="w")
+            self.template_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            template_scroll = ttk.Scrollbar(template_tab, orient="vertical", command=self.template_tree.yview)
+            template_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+            self.template_tree.configure(yscrollcommand=template_scroll.set)
+            self.template_tree.bind("<Double-1>", lambda event: self.open_template_item())
+            self.template_items = {}
+            self.refresh_template_manager()
 
             # About tab
             about_tab = tk.Frame(notebook)
@@ -432,27 +532,103 @@ class EmailProcessor:
         except Exception as e:
             print(f"-An error occurred while initializing the EmailProcessor: {str(e)}")
 
-    def main(self):  # Runs when start button is pressed
-        if self.TESTING:  # set appropriate folders for testing
+    def refresh_template_manager(self):
+        if not hasattr(self, "template_tree"):
+            return
+        for item in self.template_tree.get_children():
+            self.template_tree.delete(item)
+        self.template_items = {}
+        folders = [
+            ("Text", str(config.get("TEMPLATE_FOLDER", "") or "")),
+            ("OCR", str(config.get("OCR_TEMPLATE_FOLDER", "") or "")),
+        ]
+        counter = 0
+        for default_type, folder in folders:
+            if not folder or not os.path.isdir(folder):
+                continue
+            for name in sorted(os.listdir(folder), key=str.casefold):
+                if not name.lower().endswith((".txt", ".json")):
+                    continue
+                path = os.path.join(folder, name)
+                vendor = os.path.splitext(name)[0]
+                template_type = default_type
+                if name.lower().endswith(".json"):
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            payload = json.load(f)
+                        vendor = str(payload.get("vendor", vendor))
+                        template_type = "OCR" if payload.get("type") == "ocr" else "Text"
+                    except Exception:
+                        template_type += " (invalid JSON)"
+                iid = f"template_{counter}"
+                counter += 1
+                self.template_items[iid] = path
+                self.template_tree.insert("", "end", iid=iid, values=(template_type, vendor, path))
+
+    def open_template_item(self):
+        if not hasattr(self, "template_tree"):
+            return
+        selection = self.template_tree.selection()
+        if not selection:
+            return
+        path = self.template_items.get(selection[0])
+        if path and os.path.exists(path):
+            try:
+                os.startfile(path)
+            except Exception as exc:
+                messagebox.showerror("Template Manager", str(exc))
+
+    def delete_template_item(self):
+        if not hasattr(self, "template_tree"):
+            return
+        selection = self.template_tree.selection()
+        if not selection:
+            return
+        path = self.template_items.get(selection[0])
+        if not path or not os.path.exists(path):
+            return
+        if not messagebox.askyesno("Delete Template", f"Delete template?\n\n{path}"):
+            return
+        try:
+            os.remove(path)
+            if hasattr(self, "rectangulator_handler"):
+                self.rectangulator_handler.invalidate_template_cache(os.path.dirname(path))
+            self.refresh_template_manager()
+        except Exception as exc:
+            messagebox.showerror("Template Manager", str(exc))
+
+    def main(self):
+        if self.TESTING:
             self.TEMPLATE_FOLDER = config["TEST_TEMPLATE_FOLDER"]
+            self.OCR_TEMPLATE_FOLDER = config.get("TEST_OCR_TEMPLATE_FOLDER", config["OCR_TEMPLATE_FOLDER"])
             self.INVOICE_FOLDER = config["TEST_INVOICE_FOLDER"]
             self.log("Testing mode enabled", tag="yellow")
         else:
             self.TEMPLATE_FOLDER = config["TEMPLATE_FOLDER"]
+            self.OCR_TEMPLATE_FOLDER = config["OCR_TEMPLATE_FOLDER"]
             self.INVOICE_FOLDER = config["INVOICE_FOLDER"]
 
-        with open(config["LOG_FILE"], "a") as file:  # open log file
+        for folder in (self.TEMPLATE_FOLDER, self.OCR_TEMPLATE_FOLDER, self.INVOICE_FOLDER):
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+        with open(config["LOG_FILE"], "a", encoding="utf-8") as file:
             file.write("\n\n")
         self.log("Connecting...", tag="dgreen")
-        self.root.update()
         self.processor_running = True
         self.ui(self.button_startup)
 
-        # Login primary connnection to gmail
-        self.imap_lock = threading.RLock()  # lock for imap connection
-        self.imap = self.safe_imap(self.connect)
+        self.imap_lock = threading.RLock()
+        try:
+            self.imap = self.safe_imap(self.connect, primary=True)
+        except self.IMAPUnavailable:
+            self.imap = None
+            self.reconnect()
         if self.imap:
-            self.processor_thread = threading.Thread(target=self.search_inbox)
+            workers = max(1, min(int(config.get("EMAIL_WORKERS", 3) or 3), 10))
+            if self.email_executor is not None:
+                self.email_executor.shutdown(wait=False, cancel_futures=False)
+            self.email_executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="invoice-email")
+            self.processor_thread = threading.Thread(target=self.search_inbox, daemon=True)
             self.processor_thread.start()
 
     def button_startup(self):
@@ -478,19 +654,20 @@ class EmailProcessor:
     class IMAPUnavailable(Exception):
         pass
 
-    def safe_imap(self, func, *args, retries=3, log_errors=True, **kwargs):
+    def safe_imap(self, func, *args, retries=3, log_errors=True, use_lock=True, **kwargs):
         last = None
         for attempt in range(retries):
             try:
-                with self.imap_lock:
+                guard = self.imap_lock if use_lock and hasattr(self, "imap_lock") else nullcontext()
+                with guard:
                     return func(*args, **kwargs)
-            except (imaplib.IMAP4.abort, TimeoutError, socket.gaierror,
+            except (imaplib.IMAP4.abort, imaplib.IMAP4.error, TimeoutError, socket.gaierror,
                     ssl.SSLError, OSError) as e:
                 last = e
-                time.sleep(min(2 ** attempt, 10))  # 1s, 2s, 4s...
+                if attempt < retries - 1:
+                    time.sleep(min(2 ** attempt, 10))
         if log_errors:
-            self.log(f"IMAP dropped ({self.brief_error(last)}) - reconnecting",
-                    tag="orange", console=True)
+            self.log(f"IMAP operation failed ({self.brief_error(last)})", tag="orange", console=True)
         raise self.IMAPUnavailable(str(last))
 
     def brief_error(self, e):  # Shortens noisy socket/SSL errors for the console
@@ -499,135 +676,253 @@ class EmailProcessor:
             return "socket EOF"
         return msg.split("(")[0].strip()[:80]
 
-    def connect(self, log=True):  # Connects email, returns imap object
+    def connect(self, log=True, primary=True):
         user = f"{self.username}.sndex@gmail.com"
         try:
             imap = imaplib.IMAP4_SSL("imap.gmail.com")
             imap.socket().settimeout(100)
             imap.login(user, self.password)
-            self.connected = True
+            if primary:
+                self.connected = True
             if log:
-                self.log(f"--- Connected to {self.username} --- {self.current_time} {self.current_date}", tag="dgreen",)
+                self.log(f"--- Connected to {self.username} --- {self.current_time} {self.current_date}", tag="dgreen")
             return imap
         except Exception as e:
+            if primary:
+                self.connected = False
             if log:
-                self.log(f"Unable to connect to {self.username}: {str(e)}", tag="red", send_email=True)
+                self.log(f"Unable to connect to {self.username}: {e}", tag="red", send_email=True)
+            raise
 
-    def disconnect(self, imap, log=True):  # Disconnects email
-        try:
-            self.safe_imap(imap.logout, retries=1, log_errors=False)  # safely logout
+    def disconnect(self, imap, log=True):
+        if imap is None:
             self.connected = False
-            if log:
-                self.log(f"--- Disconnected from {self.username} --- {self.current_time} {self.current_date}", tag="red",)
+            return
+        try:
+            imap.logout()
         except Exception as e:
             if log:
-                self.log(f"An error occurred while disconnecting: {str(e)}", tag="red", send_email=True)
+                self.log(f"An error occurred while disconnecting: {e}", tag="orange")
         finally:
-            self.connected = False
+            if imap is getattr(self, "imap", None):
+                self.connected = False
             if log:
-                self.log(f"--- Disconnected from {self.username} --- {self.current_time} {self.current_date}", tag="red",)
+                self.log(f"--- Disconnected from {self.username} --- {self.current_time} {self.current_date}", tag="red")
 
-    """ 
-    Search inbox loops through emails, creates thread for each email to process it by running process_email.
-    Process email calls handle_attachments which calls add_to_queue, which adds the pdf to the queue which is processed by process_queue on a separate thread.
-    The queue is processed by handle_rectangulator which runs the rectangulator and prints the invoice if needed.
-    """
-
-    def search_inbox(self):  # Main Loop, searches inbox for new emails, creates thread to handle each
-        cycle_count = 0  # cycle count for reconnecting every hour
-        
+    def search_inbox(self):
+        cycle_count = 0
         while self.processor_running:
             try:
-                if not self.pause_event.is_set() and self.connected:
-                    # Search for all emails in the inbox
-                    self.safe_imap(self.imap.select, "INBOX")  # select inbox
-                    _, emails = self.safe_imap(self.imap.uid, "search", None, "UNSEEN")
-                    uids = [uid.decode() for uid in emails[0].split() if uid]  # Decode bytes to str and filter out empty uids
-                    new_uids = []
+                if self.pause_event.is_set():
+                    time.sleep(0.25)
+                    continue
+                if not self.connected or self.imap is None:
+                    self.reconnect()
+                    continue
 
-                    # check if emails have already been processed
-                    with self.current_emails_lock:
-                        for uid in uids:
-                            if uid not in self.current_emails:
-                                new_uids.append(uid)
-                                self.current_emails.add(uid)
-                                self.safe_imap(self.imap.uid, "STORE", uid, "-FLAGS", "(\Seen)")  # mark as unseen
+                self.safe_imap(self.imap.select, "INBOX")
+                _, emails = self.safe_imap(self.imap.uid, "search", None, "UNSEEN")
+                uids = [uid.decode() for uid in emails[0].split() if uid]
+                new_uids = []
+                with self.current_emails_lock:
+                    for uid in uids:
+                        if uid not in self.current_emails:
+                            self.current_emails.add(uid)
+                            new_uids.append(uid)
 
-                    # Check if no new mail
-                    if not new_uids:
-                        self.log(f"No new emails - {self.current_time} {self.current_date}", tag="no_new_emails", write=False)
-                        self.check_labels(["Need_Print", "Errors"], self.imap)
-                        self.pause_event.wait(timeout=config["INBOX_CYCLE_TIME"])  # pause until next cycle
-                    else:
-                        for uid in new_uids:
-                            threading.Thread(target=self.process_email, args=(uid,), daemon=True).start()
+                if new_uids:
+                    for uid in new_uids:
+                        try:
+                            self.email_executor.submit(self.process_email, uid)
+                        except RuntimeError:
+                            self.release_current_email(uid)
+                else:
+                    self.log(f"No new emails - {self.current_time} {self.current_date}", tag="no_new_emails", write=False)
+                    self.check_labels(["Need_Print", "Errors"], self.imap)
+                    self.pause_event.wait(timeout=max(1, int(config.get("INBOX_CYCLE_TIME", 30))))
 
                 cycle_count += 1
-                # Reconnect every hour
-                RECONNECT_CYCLE_COUNT = ceil(config["RECONNECT_TIME"] / config["INBOX_CYCLE_TIME"])
-                if cycle_count % RECONNECT_CYCLE_COUNT == 0:
+                cycle_time = max(1, int(config.get("INBOX_CYCLE_TIME", 30)))
+                reconnect_time = max(cycle_time, int(config.get("RECONNECT_TIME", 3600)))
+                reconnect_cycles = max(1, ceil(reconnect_time / cycle_time))
+                if cycle_count >= reconnect_cycles:
                     self.reconnect()
                     cycle_count = 0
-
             except self.IMAPUnavailable:
                 self.reconnect()
-            except imaplib.IMAP4.abort as e:
-                self.log(f"Search Socket error: {str(e)} -- {self.current_time} {self.current_date}", tag="red", send_email=False)
-                self.reconnect()
             except Exception as e:
-                self.log(f"An error occurred while searching the inbox: {str(e)} \n{traceback.format_exc()}", tag="red", send_email=True)
+                self.log(f"An error occurred while searching the inbox: {e}\n{traceback.format_exc()}", tag="red", send_email=True)
                 self.reconnect()
 
-        # Logout and cleanup when processor_running is set to False
         try:
             self.disconnect(self.imap)
         except Exception:
             pass
-            
         if self.logging_out:
             self.logging_out = False
             self.ui(self.start_button.config, state=tk.NORMAL)
             self.ui(self.testing_button.config, state=tk.NORMAL)
             self.ui(self.away_mode_button.config, state=tk.NORMAL)
 
-    def process_email(self, mail):  # Handles each email in own thread created by search_inbox
+    def process_email(self, mail):
         subject = ""
-        imap = self.connect(log=False)
+        imap = None
         try:
-            # Fetch email
+            imap = self.safe_imap(self.connect, log=False, primary=False, use_lock=False)
             msg = self.get_msg(mail, "INBOX", imap)
             if msg is None:
                 self.log(f"Email not found (process_email): {mail}", tag="red", send_email=True)
+                self.release_current_email(mail)
                 return
-            subject = msg["Subject"]
-            sender_email = email.utils.parseaddr(msg["From"])[1]
-
-            # Check if sender is trusted
-            if not sender_email.endswith(self.EMAIL_ENDING):
+            subject = msg.get("Subject", "")
+            sender_email = email.utils.parseaddr(msg.get("From", ""))[1]
+            if not sender_email.lower().endswith(str(self.EMAIL_ENDING).lower()):
                 self.move_email(mail, "Not_Invoices", "INBOX", imap)
+                self.release_current_email(mail)
                 return
 
-            # Check for attachments
             has_attachment = any(
                 part.get_content_disposition() == "attachment"
-                and part.get_filename() is not None and part.get_filename().lower().endswith(".pdf")
-                for part in msg.walk())
+                and part.get_filename() is not None
+                and part.get_filename().lower().endswith(".pdf")
+                for part in msg.walk()
+            )
             if not has_attachment:
-                self.log(f"No PDF attachment in '{subject}', skipping.", tag="orange")
-                pass
-            else:
-                self.handle_attachments(mail, imap, msg, subject, sender_email)
+                label = str(config.get("NO_PDF_LABEL", "Not_Invoices") or "Not_Invoices")
+                self.log(f"No PDF attachment in '{subject}', moving to {label}.", tag="orange")
+                self.move_email(mail, label, "INBOX", imap)
+                self.release_current_email(mail)
+                return
+            self.handle_attachments(mail, imap, msg, subject, sender_email)
+        except self.IMAPUnavailable as e:
+            self.log(f"IMAP unavailable while processing '{subject or mail}': {e}", tag="red")
+            self.release_current_email(mail)
         except Exception as e:
-            self.log(f"An error occurred while processing an email: {str(e)} \n{traceback.format_exc()}", tag="red", send_email=True)
-            self.move_email(mail, "Errors", "INBOX", imap)
-            return
-        finally:
+            self.log(f"An error occurred while processing an email: {e}\n{traceback.format_exc()}", tag="red", send_email=True)
             try:
-                print(f"-Disconncting imap for email {mail} - {subject}")
-                imap.logout()
-            except Exception as e:
-                self.log(f"Error occurred while logging out: {str(e)}", tag="red", send_email=True)
+                if imap:
+                    self.move_email(mail, "Errors", "INBOX", imap)
+            except Exception:
                 pass
+            self.release_current_email(mail)
+        finally:
+            if imap:
+                try:
+                    imap.logout()
+                except Exception:
+                    pass
+
+    def release_current_email(self, mail):
+        with self.current_emails_lock:
+            self.current_emails.discard(str(mail))
+
+    @staticmethod
+    def sha256_bytes(data):
+        return hashlib.sha256(data).hexdigest()
+
+    @staticmethod
+    def sha256_file(filepath):
+        digest = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def get_document_history(self, document_hash):
+        try:
+            with sqlite3.connect(self.ARCHIVE_DB) as db:
+                row = db.execute(
+                    "SELECT sha256, is_invoice, saved, printed, final_name, filepath, first_seen, last_seen "
+                    "FROM document_history WHERE sha256 = ?", (document_hash,)
+                ).fetchone()
+            if not row:
+                return None
+            keys = ("sha256", "is_invoice", "saved", "printed", "final_name", "filepath", "first_seen", "last_seen")
+            return dict(zip(keys, row))
+        except sqlite3.Error as exc:
+            self.log(f"Could not query document history: {exc}", tag="orange")
+            return None
+
+    def record_document_history(self, document_hash, is_invoice=True, saved=False, printed=False,
+                                final_name=None, filepath=None):
+        if not document_hash:
+            return
+        now = datetime.now().isoformat(timespec="seconds")
+        try:
+            with sqlite3.connect(self.ARCHIVE_DB) as db:
+                existing = db.execute(
+                    "SELECT first_seen, saved, printed, final_name, filepath FROM document_history WHERE sha256 = ?",
+                    (document_hash,),
+                ).fetchone()
+                first_seen = existing[0] if existing else now
+                old_saved = bool(existing[1]) if existing else False
+                old_printed = bool(existing[2]) if existing else False
+                old_name = existing[3] if existing else None
+                old_path = existing[4] if existing else None
+                db.execute(
+                    "INSERT OR REPLACE INTO document_history "
+                    "(sha256, is_invoice, saved, printed, final_name, filepath, first_seen, last_seen) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        document_hash, int(bool(is_invoice)), int(bool(saved or old_saved)),
+                        int(bool(printed or old_printed)), final_name or old_name, filepath or old_path,
+                        first_seen, now,
+                    ),
+                )
+                db.commit()
+        except sqlite3.Error as exc:
+            self.log(f"Could not update document history: {exc}", tag="orange")
+
+    def recover_or_skip_duplicate(self, document_hash, mail, subject, filename):
+        history = self.get_document_history(document_hash)
+        if not history:
+            return False
+        is_invoice = bool(history["is_invoice"])
+        self.valid_invoice_flags[mail] = self.valid_invoice_flags.get(mail, False) or is_invoice
+        filepath = history.get("filepath")
+        if is_invoice and history.get("saved") and not history.get("printed") and filepath and os.path.exists(filepath):
+            self.log(f"Recovered previously saved-but-unprinted invoice {os.path.basename(filepath)}.", tag="yellow")
+            printed = self.print_invoice(filepath)
+            if printed:
+                self.record_document_history(document_hash, True, True, True, os.path.basename(filepath), filepath)
+        else:
+            self.log(f"Duplicate attachment skipped: {filename}", tag="yellow")
+        self.gui_queue.put((0, "NEW", mail, subject, f"Duplicate - {filename}", filepath or ""))
+        self.gui_queue.put((0, "STATUS", f"{mail}_Duplicate - {filename}", "duplicate", filepath or ""))
+        return True
+
+    def resolve_destination(self, desired_path, document_hash=None):
+        desired_path = os.path.abspath(desired_path)
+        if not os.path.exists(desired_path):
+            return desired_path, False
+        try:
+            existing_hash = self.sha256_file(desired_path)
+            if document_hash and existing_hash == document_hash:
+                return desired_path, True
+        except OSError:
+            pass
+        base, ext = os.path.splitext(desired_path)
+        suffix = (document_hash or hashlib.sha256(str(time.time_ns()).encode()).hexdigest())[:8]
+        conflict = f"{base}_CONFLICT_{suffix}{ext}"
+        counter = 2
+        while os.path.exists(conflict):
+            conflict = f"{base}_CONFLICT_{suffix}_{counter}{ext}"
+            counter += 1
+        self.log(
+            f"Invoice identity collision: {os.path.basename(desired_path)} already exists with different content; "
+            f"saving as {os.path.basename(conflict)}.", tag="orange", send_email=True,
+        )
+        return conflict, False
+
+    def open_folder(self, folder):
+        try:
+            folder = str(folder or "").strip()
+            if not folder:
+                return
+            os.makedirs(folder, exist_ok=True)
+            os.startfile(folder)
+        except Exception as exc:
+            messagebox.showerror("Open Folder", str(exc))
 
     def safe_pdf_name(self, filename):  # Sanitize filename to prevent issues
         base = os.path.basename(filename or "invoice.pdf")
@@ -636,106 +931,104 @@ class EmailProcessor:
             base += ".pdf"
         return base or "invoice.pdf"
 
-    def handle_attachments(self, mail, imap, msg, subject, sender_email):  # Iterate over email parts and find pdf, ran by process_email
+    def handle_attachments(self, mail, imap, msg, subject, sender_email):
         if msg is None:
             self.log(f"Email not found (handle_attachments): {mail}", tag="red", send_email=True)
+            self.release_current_email(mail)
             return
-        filenames = []
-        pending = []  # (filename, filepath) queued only after remaining_pdfs is set
+        seen_attachment_names = set()
+        pending = []  # filename, filepath, sha256, ocr_mode
 
         for part in msg.walk():
-            if (part.get_filename() not in filenames
-                    and part.get_content_disposition() is not None
-                    and part.get_filename() is not None
-                    and part.get_filename().lower().endswith(".pdf")):
+            raw_name = part.get_filename()
+            if (not raw_name or raw_name in seen_attachment_names or
+                    part.get_content_disposition() is None or not raw_name.lower().endswith(".pdf")):
+                continue
+            seen_attachment_names.add(raw_name)
+            filename = self.safe_pdf_name(raw_name)
+            if self.TESTING == "test":
+                filename = f"Test_{filename}"
+            filepath = os.path.join(self.INVOICE_FOLDER, filename)
+            if os.path.commonpath([os.path.abspath(filepath), os.path.abspath(self.INVOICE_FOLDER)]) != os.path.abspath(self.INVOICE_FOLDER):
+                raise ValueError("Refusing to write outside the invoice folder")
 
-                # Get filename and attachment
-                filename = self.safe_pdf_name(part.get_filename())
-                if self.TESTING == "test":  # when testing inbox
-                    filename = f"Test_{filename}"
-                filepath = os.path.join(self.INVOICE_FOLDER, filename)
+            attachment = part.get_payload(decode=True)
+            if not attachment:
+                self.log(f"Empty PDF attachment '{filename}'", tag="orange")
+                continue
+            document_hash = self.sha256_bytes(attachment)
+            if self.recover_or_skip_duplicate(document_hash, mail, subject, filename):
+                continue
 
-                if os.path.commonpath([os.path.abspath(filepath), # ensure filepath is within invoice folder
-                       os.path.abspath(self.INVOICE_FOLDER)]) != os.path.abspath(self.INVOICE_FOLDER):
-                        raise ValueError("Refusing to write outside the invoice folder")
+            if os.path.exists(filepath):
+                stem, ext = os.path.splitext(filename)
+                filepath = os.path.join(self.INVOICE_FOLDER, f"{stem}_incoming_{document_hash[:8]}{ext}")
+                filename = os.path.basename(filepath)
+            filepath = re.sub(r'[\n\r\t]', ' ', filepath)
+            with open(filepath, "wb") as file:
+                file.write(attachment)
 
-                attachment = part.get_payload(decode=True)
+            has_text = self.rectangulator_handler.document_has_embedded_text(filepath)
+            if not has_text:
+                self.log(f"No embedded text found in {filename}; routing to human-confirmed OCR.", tag="yellow")
+                pending.append((filename, filepath, document_hash, True))
+                self.root.after(0, self.flash_taskbar)
+                continue
 
-                # Check if file already exists
-                if os.path.exists(filepath):
-                    filename = f"{filename[:-4]}_{''.join(random.choices(string.ascii_letters + string.digits, k=10))}.pdf"
-                    filepath = os.path.join(self.INVOICE_FOLDER, filename)
-                    self.log(f"New invoice file already exists, renamed {filename}", tag="orange")
-
-                # Sanitize filepath
-                filepath = re.sub(r'[\n\r\t]', ' ', filepath)
-
-                # Download invoice PDF
-                with open(filepath, "wb") as file:
-                    file.write(attachment)
-
-                # Check if template exists
-                template_exists = self.rectangulator_handler.check_templates(filepath, self.TEMPLATE_FOLDER, self.root)
-                if template_exists:
-                    # check for split invoice
-                    if template_exists[0] == "SPLIT_PDF":
-                        self.log(f"Split invoice detected for {filename} -- {self.current_date} {self.current_time}", tag="yellow")
-                        doc = fitz.open(filepath)
+            template_exists = self.rectangulator_handler.check_templates(filepath, self.TEMPLATE_FOLDER, self.root)
+            if template_exists:
+                if template_exists[0] == "SPLIT_PDF":
+                    self.log(f"Split invoice detected for {filename} -- {self.current_date} {self.current_time}", tag="yellow")
+                    with fitz.open(filepath) as doc:
                         for i in range(len(doc)):
-                            new_filename = f"{filename[:-4]}_part{i+1}.pdf"
+                            new_filename = f"{os.path.splitext(filename)[0]}_part{i+1}.pdf"
                             new_filepath = os.path.join(self.INVOICE_FOLDER, new_filename)
-                            self.log(f"Creating split invoice {i+1} of {len(doc)}: {new_filename}", tag="yellow")
-
                             new_doc = fitz.open()
                             new_doc.insert_pdf(doc, from_page=i, to_page=i)
                             new_doc.save(new_filepath)
                             new_doc.close()
+                            part_hash = self.sha256_file(new_filepath)
+                            pending.append((new_filename, new_filepath, part_hash, False))
+                    # Do not mark the multi-page source complete yet. If the program
+                    # crashes while processing its split pages, the original email
+                    # should be eligible for recovery on the next run.
+                    os.remove(filepath)
+                    continue
 
-                            filenames.append(new_filename)
-                            pending.append((new_filename, new_filepath))
-
-                        doc.close()
-                        os.remove(filepath)  # remove original split pdf
-                        template_exists = None  # reset template_exists to None to avoid processing the original file
-                        continue  # skip the rest of the loop for this email
-
-
-
-                    self.log(f"Template found for {filename} -- {self.current_date} {self.current_time}", tag="lgreen")
-                    new_filepath = template_exists[0]
-                    # Check if file already exists
-                    if os.path.exists(new_filepath):
-                        filename = f"{os.path.basename(new_filepath)[:-4]}_{''.join(random.choices(string.ascii_letters + string.digits, k=10))}.pdf"
-                        new_filepath = os.path.join(self.INVOICE_FOLDER, filename)                        
-                        self.log(f"New invoice file already exists, renamed {filename}", tag="orange")
-                        
-                    os.rename(filepath, new_filepath)  # Rename file to new filepath
-                    self.gui_queue.put((0, "NEW", mail, subject, filename, new_filepath))
-                    self.gui_queue.put((0, "STATUS", f"{mail}_{filename}", "saved", filename, new_filepath))
-                    self.print_invoice(new_filepath, f"{mail}_{filename}")
+                desired = template_exists[0]
+                new_filepath, duplicate_on_disk = self.resolve_destination(desired, document_hash)
+                if duplicate_on_disk:
+                    os.remove(filepath)
                     self.valid_invoice_flags[mail] = True
-                # No template found, add to rectangulator queue
-                else:  
-                    self.root.after(0, self.flash_taskbar)  # flash taskbar if new email
-                    filenames.append(filename)
-                    pending.append((filename, filepath))
+                    self.record_document_history(document_hash, True, True, True, os.path.basename(new_filepath), new_filepath)
+                    continue
+                os.rename(filepath, new_filepath)
+                new_name = os.path.basename(new_filepath)
+                self.gui_queue.put((0, "NEW", mail, subject, new_name, new_filepath))
+                self.gui_queue.put((0, "STATUS", f"{mail}_{new_name}", "saved", new_name, new_filepath))
+                self.valid_invoice_flags[mail] = True
+                self.record_document_history(document_hash, True, True, False, new_name, new_filepath)
+                printed = self.print_invoice(new_filepath, f"{mail}_{new_name}")
+                if printed:
+                    self.record_document_history(document_hash, True, True, True, new_name, new_filepath)
+            else:
+                self.root.after(0, self.flash_taskbar)
+                pending.append((filename, filepath, document_hash, False))
 
-        # Register the counter BEFORE anything is queued. A templated PDF can finish
-        # in milliseconds, and if remaining_pdfs[mail] does not exist yet that
-        # decrement is silently lost and the email never leaves the inbox.
-        self.remaining_pdfs[mail] = len(pending)
-
+        with self.state_lock:
+            self.remaining_pdfs[mail] = len(pending)
         mode = self.queue_testing_mode(subject, sender_email)
-        for queued_name, queued_path in pending:
-            self.add_to_queue(mail, subject, queued_name, queued_path, testing=mode)
+        for queued_name, queued_path, document_hash, ocr_mode in pending:
+            self.add_to_queue(mail, subject, queued_name, queued_path, testing=mode,
+                              document_hash=document_hash, ocr_mode=ocr_mode)
 
         if not pending:
-            self.remaining_pdfs.pop(mail, None)
-            if self.valid_invoice_flags.get(mail, False):
-                self.move_email(mail, "Invoices", "INBOX", self.imap)
-            else:
-                self.move_email(mail, "Not_Invoices", "INBOX", self.imap)
-            self.valid_invoice_flags.pop(mail, None)
+            with self.state_lock:
+                self.remaining_pdfs.pop(mail, None)
+                valid = self.valid_invoice_flags.pop(mail, False)
+            label = "Invoices" if valid else "Not_Invoices"
+            self.move_email(mail, label, "INBOX", self.imap)
+            self.release_current_email(mail)
 
     def queue_testing_mode(self, subject, sender_email):  # Which testing flag add_to_queue should get
         if subject == "Test":
@@ -746,185 +1039,200 @@ class EmailProcessor:
             return "scanner"
         return False
 
-    def add_to_queue(self, mail, subject, filename, filepath, testing=False):  # Adds invoices to queue, ran by handle_attachments
+    def add_to_queue(self, mail, subject, filename, filepath, testing=False, document_hash=None, ocr_mode=False):
         try:
             self.gui_queue.put((1, "NEW", mail, subject, filename, filepath))
-            self.gui_queue.put((2, "RECTANGULATE", mail, filename, filepath, testing))  # add to queue for rectangulator
+            self.gui_queue.put((2, "RECTANGULATE", mail, filename, filepath, testing, document_hash, bool(ocr_mode)))
         except Exception as e:
-            self.log(f"An error occurred while processing the queue: {str(e)}", tag="red", send_email=True)
+            self.log(f"An error occurred while processing the queue: {e}", tag="red", send_email=True)
 
-    def process_queue(self):  # Processes queue of emails
+    def process_queue(self):
         try:
-            # Check if any gui tasks are in the queue
             if not self.gui_queue.empty() and not self.gui_busy:
-                task = self.gui_queue.get()[1:]  # Unpack the task, ignore priority
+                task = self.gui_queue.get()[1:]
                 task_type = task[0]
                 if task_type == "NEW":
                     mail, subject, filename, filepath = task[1:5]
-                    self.inbox.insert(
-                        "", "end",
-                        iid=f"{mail}_{filename}",
-                        values=(subject, self.current_date, filename, "No", "No", "", filepath), # Invoice, Saved, Printed, Errors
-                        tags=("pending",))
-                    
-                if task_type == "STATUS":
+                    iid = f"{mail}_{filename}"
+                    if iid not in self.inbox.get_children():
+                        self.inbox.insert(
+                            "", "end", iid=iid,
+                            values=(subject, self.current_date, filename, "No", "No", "", filepath),
+                            tags=("pending",),
+                        )
+                elif task_type == "STATUS":
                     _id, status = task[1:3]
+                    if _id not in self.inbox.get_children():
+                        return
                     item = self.inbox.item(_id)
                     values = list(item["values"])
-
                     if status == "saved":
                         filename, filepath = task[3:5]
-                        values[2] = filename
-                        values[6] = filepath
+                        values[2], values[6] = filename, filepath
                         if filename != "Not Invoice":
                             values[3] = "Yes"
                         self.inbox.item(_id, tags=("finished",))
                     elif status == "printed":
                         values[4] = "Yes"
+                    elif status == "duplicate":
+                        filepath = task[3] if len(task) > 3 else values[6]
+                        values[3] = "Duplicate"
+                        values[6] = filepath
+                        self.inbox.item(_id, tags=("finished",))
                     elif status.startswith("Error"):
                         values[5] = status
                         self.inbox.item(_id, tags=("error",))
                     self.inbox.item(_id, values=values)
-
-                if task_type == "REMOVE":
+                elif task_type == "REMOVE":
                     _id = task[1]
                     if _id in self.inbox.get_children():
                         self.inbox.delete(_id)
-
-                if task_type == "RECTANGULATE":
+                elif task_type == "RECTANGULATE":
                     self.gui_busy = True
-                    # Unpack the task
-                    mail, filename, filepath, testing = task[1:6]
-                    # run rectangulator in the main thread
-                    self.root.after(0, lambda: self.handle_rectangulator(mail, filename, filepath, testing))
+                    mail, filename, filepath, testing, document_hash, ocr_mode = task[1:7]
+                    self.root.after(
+                        0, lambda m=mail, n=filename, p=filepath, t=testing, h=document_hash, o=ocr_mode:
+                        self.handle_rectangulator(m, n, p, t, h, o)
+                    )
         finally:
-            self.root.after(100, self.process_queue)  # Schedule the next check of the queue
+            self.root.after(100, self.process_queue)
 
-    def handle_rectangulator(self, mail, filename, filepath, testing):  # Handles rectangulator
+    def handle_rectangulator(self, mail, filename, filepath, testing, document_hash=None, ocr_mode=False):
         counted = False
+        inbox_item_id = f"{mail}_{filename}"
         try:
-            inbox_item_id = f"{mail}_{filename}"
-
-            # Just in time check for templates in case they were added after the email was processed
-            if testing is False:
+            # Native text templates may have been created while this invoice waited
+            # in the UI queue. OCR templates never bypass human review.
+            if not ocr_mode and testing is False:
                 template_exists = self.rectangulator_handler.check_templates(filepath, self.TEMPLATE_FOLDER, self.root)
-                if template_exists:
-                    self.log(f"Template found for queued item {filename} -- {self.current_date} {self.current_time}", tag="lgreen")
-                    new_filepath = template_exists[0]
-                    
-                    # Handle renaming if the target file already exists
-                    if os.path.exists(new_filepath):
-                        new_filename = f"{os.path.basename(new_filepath)[:-4]}_{''.join(random.choices(string.ascii_letters + string.digits, k=10))}.pdf"
-                        new_filepath = os.path.join(self.INVOICE_FOLDER, new_filename)
-                        self.log(f"New invoice file already exists, renamed {new_filename}", tag="orange")
-                        
-                    os.rename(filepath, new_filepath)
-                    self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", os.path.basename(new_filepath), new_filepath))
-                    self.print_invoice(new_filepath, inbox_item_id)
-
-                    # Set flag and count down instead of moving immediately ---
+                if template_exists and template_exists[0] != "SPLIT_PDF":
+                    desired = template_exists[0]
+                    new_filepath, duplicate_on_disk = self.resolve_destination(desired, document_hash)
+                    if duplicate_on_disk:
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
+                    else:
+                        os.rename(filepath, new_filepath)
+                    new_name = os.path.basename(new_filepath)
+                    self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", new_name, new_filepath))
                     self.valid_invoice_flags[mail] = True
-
+                    self.record_document_history(document_hash, True, True, False, new_name, new_filepath)
+                    printed = True if duplicate_on_disk else self.print_invoice(new_filepath, inbox_item_id)
+                    if printed:
+                        self.record_document_history(document_hash, True, True, True, new_name, new_filepath)
                     self.finish_pdf(mail)
                     counted = True
-                    
-                    self.gui_busy = False # Free the queue
                     return
 
-            return_list = self.rectangulator_handler.rectangulate(filename, filepath, self, self.TEMPLATE_FOLDER, testing)
+            return_list = self.rectangulator_handler.rectangulate(
+                filename, filepath, self, self.TEMPLATE_FOLDER, testing,
+                ocr_mode=ocr_mode, ocr_template_folder=self.OCR_TEMPLATE_FOLDER,
+            )
             print(f"-rectangulator returned: {return_list}")
 
-            # If away mode do nothing
             if self.AWAY_MODE:
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", f"Away Mode - {filename}", "None"))
-                counted = True  # leave the email in INBOX to be handled manually later
-                self.remaining_pdfs.pop(mail, None)
-                self.valid_invoice_flags.pop(mail, None)
+                with self.state_lock:
+                    self.remaining_pdfs.pop(mail, None)
+                    self.valid_invoice_flags.pop(mail, None)
+                counted = True
                 return
 
-            # Check if Rectangulator fails
-            if return_list == [] or return_list[0] == None:
-                self.move_email(mail, "Errors", "INBOX", self.imap)
+            if return_list == [] or not return_list or return_list[0] is None:
+                if not str(mail).startswith("REPROCESS_"):
+                    self.move_email(mail, "Errors", "INBOX", self.imap)
                 if os.path.exists(filepath):
                     os.remove(filepath)
-                self.log(f"Failed to download '{filename}', moved to Error label, not printed", tag="red", send_email=True)
+                self.log(f"Failed to process '{filename}', moved to Error label, not printed", tag="red", send_email=True)
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Rectangulating"))
+                with self.state_lock:
+                    self.remaining_pdfs.pop(mail, None)
+                    self.valid_invoice_flags.pop(mail, None)
                 counted = True
-                self.remaining_pdfs.pop(mail, None)
-                self.valid_invoice_flags.pop(mail, None)
+                self.release_current_email(mail)
                 return
 
-            # Check if test email
             if return_list[0] == "test_email":
-                self.log(f"Test complete", tag="purple")
+                self.log("Test complete", tag="purple")
                 self.move_email(mail, "Test_Email", "INBOX", self.imap)
                 if os.path.exists(filepath):
                     os.remove(filepath)
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Test Email", "None"))
+                with self.state_lock:
+                    self.remaining_pdfs.pop(mail, None)
+                    self.valid_invoice_flags.pop(mail, None)
                 counted = True
-                self.remaining_pdfs.pop(mail, None)
-                self.valid_invoice_flags.pop(mail, None)
+                self.release_current_email(mail)
                 return
 
             new_filepath, should_print = return_list
-     
-            # If this specific PDF is an invoice, flag the email as containing an invoice
-            if new_filepath != "not_invoice":
-                self.valid_invoice_flags[mail] = True
-
-            # Check if not invoice
             if new_filepath == "not_invoice":
-                new_filepath, should_print, should_save = should_print    
-                if testing == True:
+                target_path, should_print, should_save = should_print
+                if testing is True:
                     should_print = False
                 if should_print:
                     self.print_invoice(filepath, inbox_item_id)
-                if not should_save:
-                    self.log(f"{os.path.basename(new_filepath)} marked not an invoice and not saved -- {self.current_time} {self.current_date}", tag="purple")
-                    os.remove(filepath)
+                if should_save:
+                    target_path, duplicate_on_disk = self.resolve_destination(target_path, document_hash)
+                    if duplicate_on_disk:
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
+                    else:
+                        os.rename(filepath, target_path)
+                    self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Not Invoice", target_path))
+                    self.record_document_history(document_hash, False, True, bool(should_print), os.path.basename(target_path), target_path)
+                else:
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
                     self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Not Invoice", "None"))
-                    self.finish_pdf(mail)
-                    counted = True
-                    return
-                self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", "Not Invoice", new_filepath))
-                self.log(f"{os.path.basename(new_filepath)} marked not an invoice and saved -- {self.current_time} {self.current_date}", tag="purple")
-            
-            if testing == True:
+                    self.record_document_history(document_hash, False, False, bool(should_print), "Not Invoice", None)
+                self.finish_pdf(mail)
+                counted = True
+                return
+
+            self.valid_invoice_flags[mail] = True
+            if testing is True:
                 should_print = False
-
-            # Check if invoice has already been processed
-            if os.path.exists(new_filepath):
-                old_filepath = new_filepath
-                self.log(f"New invoice file already exists at {os.path.basename(old_filepath)} -- {self.current_time} {self.current_date}", tag="orange")
-                new_filepath = f"{old_filepath[:-4]}_{''.join(random.choices(string.ascii_letters + string.digits, k=10))}.pdf"
-
-            # Save invoice
-            os.rename(filepath, new_filepath)
-            self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", os.path.basename(new_filepath), new_filepath))
-            self.log(f"Created new invoice file {os.path.basename(new_filepath)} -- {self.current_date} {self.current_time}", tag="lgreen")
-            if should_print:
-                self.print_invoice(new_filepath, inbox_item_id)
-
-            # Count down only once the file is safely on disk
+            new_filepath, duplicate_on_disk = self.resolve_destination(new_filepath, document_hash)
+            if duplicate_on_disk:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            else:
+                os.rename(filepath, new_filepath)
+            new_name = os.path.basename(new_filepath)
+            self.gui_queue.put((0, "STATUS", inbox_item_id, "saved", new_name, new_filepath))
+            self.log(f"Created new invoice file {new_name} -- {self.current_date} {self.current_time}", tag="lgreen")
+            self.record_document_history(document_hash, True, True, False, new_name, new_filepath)
+            printed = duplicate_on_disk
+            if should_print and not duplicate_on_disk:
+                printed = self.print_invoice(new_filepath, inbox_item_id)
+            if printed:
+                self.record_document_history(document_hash, True, True, True, new_name, new_filepath)
             self.finish_pdf(mail)
             counted = True
         except Exception as e:
-            self.log(f"Rectangulator failed for '{filename}': {e} \n{traceback.format_exc()}", tag="red", send_email=True)
+            self.log(f"Rectangulator failed for '{filename}': {e}\n{traceback.format_exc()}", tag="red", send_email=True)
         finally:
             if not counted:
                 self.finish_pdf(mail)
             self.gui_busy = False
 
-    def finish_pdf(self, mail):  # Count off one finished PDF, move the email when all parts are done
-        if mail not in self.remaining_pdfs:
+    def finish_pdf(self, mail):
+        with self.state_lock:
+            if mail not in self.remaining_pdfs:
+                return
+            self.remaining_pdfs[mail] -= 1
+            if self.remaining_pdfs[mail] > 0:
+                return
+            del self.remaining_pdfs[mail]
+            valid = self.valid_invoice_flags.pop(mail, False)
+
+        if str(mail).startswith("REPROCESS_"):
+            self.release_current_email(mail)
             return
-        self.remaining_pdfs[mail] -= 1
-        if self.remaining_pdfs[mail] > 0:
-            return
-        del self.remaining_pdfs[mail]
-        label = "Invoices" if self.valid_invoice_flags.get(mail, False) else "Not_Invoices"
-        self.valid_invoice_flags.pop(mail, None)
+        label = "Invoices" if valid else "Not_Invoices"
         self.move_email(mail, label, "INBOX", self.imap)
+        self.release_current_email(mail)
 
     def remove_inbox_item(self, log=True):  # Removes inbox item on double click and adds to archive
         # Only if item has finished tag
@@ -960,6 +1268,33 @@ class EmailProcessor:
         self.db.execute("DELETE FROM archive WHERE id = ?", (_id,))  # Remove from database
         self.db.commit() 
         self.log(f"Removed archive item {_id} from archive.", tag="blue")  # Log removal
+
+    def reprocess_archive_item(self):
+        item = self.archive.selection()
+        if not item:
+            messagebox.showinfo("Reprocess", "Select an archived item first.")
+            return
+        source = self.archive.item(item[0], "values")[-1]
+        if not source or not os.path.exists(source):
+            messagebox.showerror("Reprocess", f"File not found: {source}")
+            return
+        try:
+            os.makedirs(self.INVOICE_FOLDER, exist_ok=True)
+            token = str(time.time_ns())
+            temp_name = f"Reprocess_{token}_{os.path.basename(source)}"
+            temp_path = os.path.join(self.INVOICE_FOLDER, temp_name)
+            shutil.copy2(source, temp_path)
+            mail = f"REPROCESS_{token}"
+            document_hash = None  # explicit reprocesses intentionally bypass duplicate suppression
+            ocr_mode = not self.rectangulator_handler.document_has_embedded_text(temp_path)
+            with self.state_lock:
+                self.remaining_pdfs[mail] = 1
+                self.valid_invoice_flags[mail] = False
+            self.add_to_queue(mail, "Archive Reprocess", temp_name, temp_path,
+                              testing="reprocess", document_hash=document_hash, ocr_mode=ocr_mode)
+            self.log(f"Queued archive file for reprocessing: {os.path.basename(source)}", tag="blue")
+        except Exception as exc:
+            messagebox.showerror("Reprocess", str(exc))
 
     def print_archive_item(self, event): # Prints archive item on middle click
         item = self.archive.selection()
@@ -1009,30 +1344,26 @@ class EmailProcessor:
         except Exception as e:
             self.log(f"Error opening file {filepath}: {str(e)}", tag="red")
 
-    def move_email(self, mail, label, og_label, imap):  # Moves email to label
+    def move_email(self, mail, label, og_label, imap):
         subject = "Unknown"
         try:
-            with self.imap_lock:
-                # Get msg and subject if possible
+            guard = self.imap_lock if imap is getattr(self, "imap", None) else nullcontext()
+            with guard:
                 msg = self.get_msg(mail, og_label, imap)
                 if msg:
-                    subject = msg["Subject"]
-
-                # Make a copy of the email in the specified label
+                    subject = msg.get("Subject", "Unknown")
                 imap.select(og_label)
                 success = imap.uid("COPY", mail, label)
                 if success[0] != "OK":
                     self.log(f"Error copying email '{subject}': {success[1]}", tag="red", send_email=True)
                     return False
-                # Mark as unseen
-                imap.uid("STORE", mail, "-FLAGS", "(\Seen)")
-
-                # Mark the original email as deleted
-                imap.uid("STORE", mail, "+FLAGS", "(\Deleted)")
+                imap.uid("STORE", mail, "+FLAGS", "(\\Deleted)")
                 imap.expunge()
-                self.log(f"Moved email '{subject}' from {og_label} to {label}.", tag="blue")
+            self.log(f"Moved email '{subject}' from {og_label} to {label}.", tag="blue")
+            return True
         except Exception as e:
-            self.log(f"Transfer failed for '{subject}': {str(e)} \n{traceback.format_exc()}", tag="red", send_email=True)
+            self.log(f"Transfer failed for '{subject}': {e}\n{traceback.format_exc()}", tag="red", send_email=True)
+            return False
 
     def send_email(self, body):  # Sends email to me
         sender_email = f"{self.username}.sndex@gmail.com"
@@ -1059,7 +1390,7 @@ class EmailProcessor:
         try:
             with self.imap_lock:
                 imap.select(label)
-                result, data = imap.uid("FETCH", mail, "(RFC822)")
+                result, data = imap.uid("FETCH", mail, "(BODY.PEEK[])")
                 if result != "OK" or not data or not data[0]:
                     self.log(f"Error fetching email: {mail}", tag="red", send_email=True)
                     return None
@@ -1080,23 +1411,33 @@ class EmailProcessor:
         except Exception as e:
             return None
 
-    def print_invoice(self, filepath, inbox_item_id=None):  # Printer
+    def print_invoice(self, filepath, inbox_item_id=None):
         try:
-            # Get default printer and print
-            printers = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)
-            p = None
-            for printer in printers:
-                if printer[2] == r"\\acdc1\Color Printer Near Server":
-                    p = printer[2]
-                    break
-            print(f"Printing to {p}")
-            win32api.ShellExecute(0, "print", filepath, None, ".", 0)
-            self.log(f"Printed {os.path.basename(filepath)}.", tag="lgreen")
+            printer_name = str(config.get("PRINTER_NAME", "") or "").strip()
+            if printer_name:
+                printers = [p[2] for p in win32print.EnumPrinters(
+                    win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+                )]
+                match = next((p for p in printers if p.casefold() == printer_name.casefold()), None)
+                if not match:
+                    raise RuntimeError(f"Configured printer '{printer_name}' is not installed/available")
+                # printto asks the registered PDF application to target this printer.
+                result = win32api.ShellExecute(0, "printto", filepath, f'"{match}"', ".", 0)
+                destination = match
+            else:
+                result = win32api.ShellExecute(0, "print", filepath, None, ".", 0)
+                try:
+                    destination = win32print.GetDefaultPrinter()
+                except Exception:
+                    destination = "Windows default printer"
+            if int(result) <= 32:
+                raise OSError(f"ShellExecute returned {result}")
+            self.log(f"Sent {os.path.basename(filepath)} to {destination}.", tag="lgreen")
             if inbox_item_id:
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "printed"))
             return True
         except Exception as e:
-            self.log(f"Printing failed for {filepath}: {str(e)}", tag="red", send_email=True)
+            self.log(f"Printing failed for {filepath}: {e}", tag="red", send_email=True)
             if inbox_item_id:
                 self.gui_queue.put((0, "STATUS", inbox_item_id, "Error Printing"))
             return False
@@ -1165,19 +1506,17 @@ class EmailProcessor:
                 self.log(f"An error occurred while checking the label: {str(e)}", tag="red", send_email=True)
                 raise imaplib.IMAP4.abort(str(e))
 
-    def get_msg(self, mail, label, imap):  # Gets email message
+    def get_msg(self, mail, label, imap):
         try:
-            with self.imap_lock:
+            guard = self.imap_lock if imap is getattr(self, "imap", None) else nullcontext()
+            with guard:
                 imap.select(label)
-                result, data = imap.uid("FETCH", mail, "(RFC822)")
+                result, data = imap.uid("FETCH", mail, "(BODY.PEEK[])")
                 if result != "OK" or not data or not data[0]:
-                    self.log(f"Error fetching email: {mail}", tag="red", send_email=True)
                     return None
-                raw_email = data[0][1]
-                msg = email.message_from_bytes(raw_email)
-                return msg
+                return email.message_from_bytes(data[0][1])
         except Exception as e:
-            self.log(f"Error getting message: {str(e)}", tag="red", send_email=True)
+            self.log(f"Error getting email message {mail}: {e}", tag="red")
             return None
 
     def remove_messages(self, message):  # Removes no_new_emails messages
@@ -1241,12 +1580,18 @@ class EmailProcessor:
         self.pause_event.clear()
 
     def restart_processing(self):  # Restarts processing
-        self.log(f"Restarting...", tag="yellow")
-        self.disconnect(self.imap)
-        if self.processor_thread:
-            self.pause_event.set()  # pause processing
-            self.processor_thread.join()  # wait for thread to finish
+        self.log("Restarting...", tag="yellow")
         self.processor_running = False
+        self.pause_event.clear()
+        try:
+            self.disconnect(getattr(self, "imap", None), log=False)
+        except Exception:
+            pass
+        if self.processor_thread and self.processor_thread.is_alive():
+            self.processor_thread.join(timeout=2)
+        if self.email_executor is not None:
+            self.email_executor.shutdown(wait=False, cancel_futures=False)
+            self.email_executor = None
         self.main()
 
     def logout(self, reconnect=False):  # Logs out
@@ -1256,6 +1601,9 @@ class EmailProcessor:
         self.processor_running = False
         self.logging_out = True
         self.current_emails.clear()  # clear current emails
+        if self.email_executor is not None:
+            self.email_executor.shutdown(wait=False, cancel_futures=False)
+            self.email_executor = None
 
         if reconnect:
             # wait a few seconds then reconnect
@@ -1278,13 +1626,19 @@ class EmailProcessor:
             self.AWAY_MODE = True
             self.away_mode_button.config(bg="#CCFFCC")
 
-    def test_rectangulator(self):  # Opens rectangulator with test invoice
+    def test_rectangulator(self):
         self.log("Testing Rectangulator...", tag="yellow")
-        return_list = []
-        return_list = self.rectangulator_handler.rectangulate("Testing Rectangulator", config["TEST_INVOICE"], self, config["TEST_TEMPLATE_FOLDER"], True)
-        if return_list != []:
-            new_filepath, should_print = return_list
-            self.log(f"Test complete - new_filepath: {new_filepath}, should_print: {should_print}", tag="purple")
+        test_path = config["TEST_INVOICE"]
+        ocr_mode = not self.rectangulator_handler.document_has_embedded_text(test_path)
+        template_folder = config.get("TEST_OCR_TEMPLATE_FOLDER") if ocr_mode else config["TEST_TEMPLATE_FOLDER"]
+        return_list = self.rectangulator_handler.rectangulate(
+            "Testing Rectangulator", test_path, self,
+            config["TEST_TEMPLATE_FOLDER"], True,
+            ocr_mode=ocr_mode,
+            ocr_template_folder=config.get("TEST_OCR_TEMPLATE_FOLDER", template_folder),
+        )
+        if return_list:
+            self.log(f"Test complete - result: {return_list}", tag="purple")
         self.log("Testing complete.", tag="yellow")
 
     def test_inbox(self):  # Sends test email to inbox, won't be printed or downloaded
@@ -1295,19 +1649,24 @@ class EmailProcessor:
             return
         self.move_email(mail, "INBOX", "Test_Email", self.imap)
 
-    def reconnect(self):  # Reconnects to email
-        self.disconnect(self.imap, log=False)
+    def reconnect(self):
+        try:
+            self.disconnect(getattr(self, "imap", None), log=False)
+        except Exception:
+            pass
         self.imap = None
-        
-        # Suspend the email checking loop until connection is actively restored
-        while self.processor_running and not self.imap:
-            self.imap = self.connect(log=False)
+        self.connected = False
+        while self.processor_running and self.imap is None:
+            try:
+                self.imap = self.safe_imap(self.connect, primary=True, retries=2, log_errors=False)
+            except self.IMAPUnavailable:
+                self.imap = None
             if self.imap:
                 self.log(f"Reconnected to {self.username} -- {self.current_time} {self.current_date}", tag="green")
                 self.update_crash_counter_label()
-            else:
-                self.log("Reconnect failed, trying again in 30 seconds...", tag="orange")
-                time.sleep(30)
+                return
+            self.log("Reconnect failed, trying again in 30 seconds...", tag="orange")
+            time.sleep(30)
 
     def on_program_exit(self):  # Runs when program is closed, disconnects and closes window
         self.log("Disconnecting...", tag="red")
@@ -1321,6 +1680,9 @@ class EmailProcessor:
             self.pause_event.set()
             self.processor_thread.join(timeout=1)  # Wait for thread to finish
 
+        if self.email_executor is not None:
+            self.email_executor.shutdown(wait=False, cancel_futures=False)
+            self.email_executor = None
         # Destroys tkinter window
         self.root.destroy()
 
