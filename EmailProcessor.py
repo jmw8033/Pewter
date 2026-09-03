@@ -1463,9 +1463,9 @@ class EmailProcessor:
         except (RuntimeError, tk.TclError):
             pass
 
-    def ui(self, fn, *args):
+    def ui(self, fn, *args, **kwargs):
         try:
-            self.root.after(0, lambda: fn(*args))
+            self.root.after(0, lambda: fn(*args, **kwargs))
         except (RuntimeError, tk.TclError):
             pass
 
@@ -1502,9 +1502,16 @@ class EmailProcessor:
                             self.ui(self.errors_button.config, bg="#FBFF2C")
                         elif label == "Need_Print":
                             self.ui(self.print_errors_button.config, bg="#FBFF2C")
+            except (imaplib.IMAP4.abort, socket.error, TimeoutError):
+                raise
+
             except Exception as e:
-                self.log(f"An error occurred while checking the label: {str(e)}", tag="red", send_email=True)
-                raise imaplib.IMAP4.abort(str(e))
+                self.log(
+                    f"An error occurred while checking the label: {str(e)}\n"
+                    f"{traceback.format_exc()}",
+                    tag="red",
+                    send_email=True,
+                )
 
     def get_msg(self, mail, label, imap):
         try:
