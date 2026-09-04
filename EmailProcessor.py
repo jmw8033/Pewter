@@ -529,13 +529,8 @@ class EmailProcessor:
                 color=self.palette["border"],
             )
             self.ax.text(
-                0.5, 0.47, "No invoice waiting for review", transform=self.ax.transAxes,
+                0.5, 0.47, "Measuring... Measuring...", transform=self.ax.transAxes,
                 ha="center", va="center", fontsize=10, color=self.palette["muted"],
-            )
-            self.ax.text(
-                0.5, 0.43, "New vendors, OCR documents, and exceptions will appear here.",
-                transform=self.ax.transAxes, ha="center", va="center", fontsize=8,
-                color=self.palette["pewter"],
             )
             self.canvas = FigureCanvasTkAgg(self.figure, master=right_frame)
             self.canvas.get_tk_widget().configure(bg=self.palette["surface"], highlightthickness=0)
