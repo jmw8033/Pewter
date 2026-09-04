@@ -9,6 +9,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from collections import OrderedDict
 import tkinter as tk
+from tkinter import filedialog
 import numpy as np
 import traceback
 import keyring
@@ -37,13 +38,20 @@ with open(os.path.join(BASE_DIR, "config.json")) as f:
 _template_parent = os.path.dirname(str(config.get("TEMPLATE_FOLDER", "") or "")) or BASE_DIR
 _test_template_parent = os.path.dirname(str(config.get("TEST_TEMPLATE_FOLDER", "") or "")) or BASE_DIR
 config.setdefault("OCR_TEMPLATE_FOLDER", os.path.join(_template_parent, "OCR_Templates"))
+config.setdefault("STATEMENT_TEMPLATE_FOLDER", os.path.join(_template_parent, "Statement_Templates"))
+_invoice_parent = os.path.dirname(str(config.get("INVOICE_FOLDER", "") or "")) or BASE_DIR
+_test_invoice_parent = os.path.dirname(str(config.get("TEST_INVOICE_FOLDER", "") or "")) or BASE_DIR
+config.setdefault("STATEMENT_FOLDER", os.path.join(_invoice_parent, "Statements"))
 config.setdefault("TEST_OCR_TEMPLATE_FOLDER", os.path.join(_test_template_parent, "OCR_Templates"))
+config.setdefault("TEST_STATEMENT_TEMPLATE_FOLDER", os.path.join(_test_template_parent, "Statement_Templates"))
+config.setdefault("TEST_STATEMENT_FOLDER", os.path.join(_test_invoice_parent, "Statements"))
 config.setdefault("OCR_FUZZY_THRESHOLD", 0.72)
 config.setdefault("OCR_DPI", 250)
 config.setdefault("OCR_LANGUAGE", "eng")
 config.setdefault("TESSDATA_PREFIX", "")
 config.setdefault("PRINTER_NAME", "")
 config.setdefault("MIN_EMBEDDED_TEXT_CHARS", 40)
+config.setdefault("POSTFIX_VENDORS", "")
 
 def get_password(username):
     password = keyring.get_password("PewterInvoiceProcessor", username)
@@ -80,6 +88,18 @@ class RectangulatorHandler:
         self.ax = ax
         self.done_var = tk.IntVar()
         self.config = dict(config)
+        self.palette = getattr(root, "palette", {
+            "surface": "#FFFFFF", "surface_alt": "#F5F7F8", "border": "#D4DDE1",
+            "text": "#26343A", "muted": "#6B7A81", "pewter": "#77878E",
+            "pewter_dark": "#4F6067", "accent": "#3E7180", "accent_hover": "#335E6A",
+            "success": "#3E7F66", "success_soft": "#E4F2EB",
+            "warning": "#B67C28", "warning_soft": "#FFF1D7",
+            "danger": "#B55353", "danger_soft": "#FBE7E7", "purple": "#766A91",
+        })
+        # Field colors deliberately mirror the order the user selects them:
+        # vendor → date → invoice number. This makes correction/retraining easier
+        # to understand without adding more on-screen instructions.
+        self.field_colors = [self.palette["accent"], self.palette["warning"], self.palette["purple"]]
 
         # Small LRU caches: native text and OCR are both expensive enough that
         # reopening/re-reading a PDF for every template is wasteful.
@@ -87,12 +107,20 @@ class RectangulatorHandler:
         self._document_cache_limit = 8
         self._template_cache = {}
         self._ocr_template_cache = {}
+        self._statement_template_cache = {}
         self._ocr_errors_reported = set()
 
         # State used by the human-confirmed OCR workflow.
         self.ocr_mode = False
         self.ocr_template_ready = False
         self.ocr_match = None
+        self.statement_mode = False
+        self.statement_match = None
+        self.statement_company = ""
+        self.statement_destination_folder = ""
+        self.statement_root = ""
+        self.statement_template_folder = ""
+        self.statement_ocr_mode = False
 
     def refresh_config(self):
         with open(os.path.join(BASE_DIR, "config.json"), "r", encoding="utf-8") as f:
@@ -100,15 +128,23 @@ class RectangulatorHandler:
         template_parent = os.path.dirname(str(self.config.get("TEMPLATE_FOLDER", "") or "")) or BASE_DIR
         test_template_parent = os.path.dirname(str(self.config.get("TEST_TEMPLATE_FOLDER", "") or "")) or BASE_DIR
         self.config.setdefault("OCR_TEMPLATE_FOLDER", os.path.join(template_parent, "OCR_Templates"))
+        self.config.setdefault("STATEMENT_TEMPLATE_FOLDER", os.path.join(template_parent, "Statement_Templates"))
+        invoice_parent = os.path.dirname(str(self.config.get("INVOICE_FOLDER", "") or "")) or BASE_DIR
+        test_invoice_parent = os.path.dirname(str(self.config.get("TEST_INVOICE_FOLDER", "") or "")) or BASE_DIR
+        self.config.setdefault("STATEMENT_FOLDER", os.path.join(invoice_parent, "Statements"))
         self.config.setdefault("TEST_OCR_TEMPLATE_FOLDER", os.path.join(test_template_parent, "OCR_Templates"))
+        self.config.setdefault("TEST_STATEMENT_TEMPLATE_FOLDER", os.path.join(test_template_parent, "Statement_Templates"))
+        self.config.setdefault("TEST_STATEMENT_FOLDER", os.path.join(test_invoice_parent, "Statements"))
         self.config.setdefault("OCR_FUZZY_THRESHOLD", 0.72)
         self.config.setdefault("OCR_DPI", 250)
         self.config.setdefault("OCR_LANGUAGE", "eng")
         self.config.setdefault("TESSDATA_PREFIX", "")
         self.config.setdefault("PRINTER_NAME", "")
         self.config.setdefault("MIN_EMBEDDED_TEXT_CHARS", 40)
+        self.config.setdefault("POSTFIX_VENDORS", "")
         self._template_cache.clear()
         self._ocr_template_cache.clear()
+        self._statement_template_cache.clear()
 
     def _document_signature(self, pdf_path):
         try:
@@ -140,10 +176,12 @@ class RectangulatorHandler:
         if folder is None:
             self._template_cache.clear()
             self._ocr_template_cache.clear()
+            self._statement_template_cache.clear()
         else:
             folder = os.path.abspath(folder)
             self._template_cache.pop(folder, None)
             self._ocr_template_cache.pop(folder, None)
+            self._statement_template_cache.pop(folder, None)
 
     @staticmethod
     def _normalise_selection(rect):
@@ -391,9 +429,12 @@ class RectangulatorHandler:
     def build_filename_from_fields(self, vendor, invoice_date, invoice_num):
         vendor_clean = self.sanitize_filename(vendor)
         prefix = self.get_vendor_prefix(vendor_clean)
+        postfix = self.get_vendor_postfix(vendor_clean)
         invoice_num = str(invoice_num or "").strip()
         if prefix and not invoice_num.startswith(prefix):
             invoice_num = f"{prefix}{invoice_num}"
+        if postfix and not invoice_num.endswith(postfix):
+            invoice_num = f"{invoice_num}{postfix}"
         invoice_date = self.clean_date(str(invoice_date or "").strip())
         return self.sanitize_filename(f"{invoice_date}_{invoice_num}")
 
@@ -415,6 +456,95 @@ class RectangulatorHandler:
         if not date_match or not num_match:
             return ""
         return self.sanitize_filename(f"{self.clean_date(date_match.group(1))}_{num_match.group(1)}")
+
+    def _load_statement_templates(self, folder):
+        folder = os.path.abspath(folder)
+        os.makedirs(folder, exist_ok=True)
+        signature = self._folder_signature(folder, patterns=("*.json",))
+        cached = self._statement_template_cache.get(folder)
+        if cached and cached[0] == signature:
+            return cached[1]
+        templates = []
+        for path in glob.glob(os.path.join(folder, "*.json")):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                if payload.get("type") != "statement":
+                    continue
+                variants = payload.get("templates") or [payload]
+                for variant in variants:
+                    fields = variant.get("fields", {})
+                    if all(k in fields for k in ("identifier", "date")):
+                        templates.append({
+                            "source": path,
+                            "company": variant.get("company", payload.get("company", "")),
+                            "folder": variant.get("folder", payload.get("folder", "")),
+                            "ocr": bool(variant.get("ocr", payload.get("ocr", False))),
+                            "fields": fields,
+                        })
+            except Exception as exc:
+                self.log(f"Error loading statement template {path}: {exc}", tag="red", display=True)
+        self._statement_template_cache[folder] = (signature, templates)
+        return templates
+
+    def check_statement_templates(self, pdf_path, template_folder, statement_root, ocr=False):
+        """Return the best statement template for the document, if one matches."""
+        templates = self._load_statement_templates(template_folder)
+        best = None
+        threshold = float(self.config.get("OCR_FUZZY_THRESHOLD", 0.72) or 0.72)
+        for template in templates:
+            if bool(template.get("ocr")) != bool(ocr):
+                continue
+            field = template["fields"]["identifier"]
+            rect, page_num = self._field_rect(field, pdf_path)
+            actual = self.get_text_in_rect(rect, pdf_path, page_num, ocr=ocr)
+            expected = field.get("expected", "")
+            if ocr:
+                score = self.fuzzy_score(expected, actual)
+            else:
+                score = 1.0 if self._normalise_match_text(expected) == self._normalise_match_text(actual) and actual.strip() else 0.0
+            if best is None or score > best["score"]:
+                best = {"score": score, "template": template, "actual_identifier": actual}
+        required = threshold if ocr else 1.0
+        if best is None or best["score"] < required:
+            return None
+
+        template = best["template"]
+        date_field = template["fields"]["date"]
+        date_rect, date_page = self._field_rect(date_field, pdf_path)
+        statement_date = self.get_text_in_rect(date_rect, pdf_path, date_page, ocr=ocr)
+        company = self.sanitize_filename(template.get("company", ""))
+        rel_folder = str(template.get("folder", "") or "").strip()
+        root_abs = os.path.abspath(statement_root)
+        destination = os.path.abspath(os.path.join(root_abs, rel_folder)) if rel_folder else os.path.join(root_abs, company)
+        try:
+            if os.path.commonpath([root_abs, destination]) != root_abs:
+                return None
+        except ValueError:
+            return None
+        best.update({
+            "company": company,
+            "destination_folder": destination,
+            "statement_date": statement_date,
+            "suggested_filename": self.build_statement_filename(company, statement_date),
+        })
+        return best
+
+    def build_statement_filename(self, company, statement_date):
+        company = self.sanitize_filename(company)
+        date_text = self.clean_date(str(statement_date or "").strip())
+        return self.sanitize_filename(f"{company} Statement {date_text}")
+
+    def statement_destination(self, entered_filename):
+        entered = self.sanitize_filename(entered_filename)
+        if not entered or not self.statement_destination_folder:
+            return None
+        # Convenience: if the user replaces the whole bar with only a date,
+        # restore the standard Company Statement Date naming convention.
+        date_candidate = self.clean_date(entered)
+        if self.statement_company and date_candidate != entered:
+            entered = self.build_statement_filename(self.statement_company, entered)
+        return os.path.join(self.statement_destination_folder, f"{entered}.pdf")
 
     def check_ocr_templates(self, pdf_path, template_folder):
         templates = self._load_ocr_templates(template_folder)
@@ -447,7 +577,8 @@ class RectangulatorHandler:
         return best
 
     def rectangulate(self, filename, filepath, root, template_folder, testing=False,
-                    ocr_mode=False, ocr_template_folder=None):
+                    ocr_mode=False, ocr_template_folder=None, statement_folder=None,
+                    statement_template_folder=None):
         # Away mode intentionally bypasses review, matching the existing behavior.
         if root.AWAY_MODE and not testing:
             self.print_invoice(filepath)
@@ -457,6 +588,15 @@ class RectangulatorHandler:
         self.ocr_match = None
         self.ocr_template_ready = False
         ocr_template_folder = ocr_template_folder or self.config.get("OCR_TEMPLATE_FOLDER")
+        statement_folder = statement_folder or self.config.get("STATEMENT_FOLDER")
+        statement_template_folder = statement_template_folder or self.config.get("STATEMENT_TEMPLATE_FOLDER")
+        self.statement_mode = False
+        self.statement_match = None
+        self.statement_company = ""
+        self.statement_destination_folder = ""
+        self.statement_root = os.path.abspath(statement_folder)
+        self.statement_template_folder = statement_template_folder
+        self.statement_ocr_mode = bool(ocr_mode)
 
         try:
             if self.ocr_mode:
@@ -472,10 +612,12 @@ class RectangulatorHandler:
                     )
                     initial_text = self.ocr_match.get("suggested_filename", "")
                 else:
-                    self.log(f"OCR template required for {filename}", tag="yellow", display=True)
+                    self.log(
+                        f"No OCR template matched {filename}; manual filename entry is available, "
+                        "or you can draw rectangles to train one.",
+                        tag="yellow", display=True,
+                    )
                     initial_text = ""
-                    if not testing:
-                        self.send_email("Must create OCR template", root)
 
                 rectangulator, text_box = self.open_rectangulator(
                     filepath, ocr_template_folder, root,
@@ -483,6 +625,8 @@ class RectangulatorHandler:
                     ocr_mode=True,
                     initial_text=initial_text,
                     ocr_match=self.ocr_match,
+                    statement_folder=statement_folder,
+                    statement_template_folder=statement_template_folder,
                 )
             else:
                 self.log(f"Template required for {filename}", display=True)
@@ -494,6 +638,8 @@ class RectangulatorHandler:
                     scanner=(testing == "scanner"),
                     ocr_mode=False,
                     initial_text=initial_text,
+                    statement_folder=statement_folder,
+                    statement_template_folder=statement_template_folder,
                 )
 
             if testing == "test":
@@ -508,6 +654,12 @@ class RectangulatorHandler:
                     self.should_print,
                     self.should_save,
                 ]]
+
+            if self.statement_mode:
+                target = self.statement_destination(text_box.text)
+                if target:
+                    return ["statement", target, self.should_print]
+                return [None, False]
 
             # OCR is never authoritative: only the user-approved text box value
             # can become the filename, even when a high-confidence template matched.
@@ -564,7 +716,7 @@ class RectangulatorHandler:
                 self.log(f"Error checking template {template.get('source', 'unknown')}: {exc}", tag="red", display=True)
         return None
 
-    def open_rectangulator(self, pdf_path, template_folder, root, scanner=False, ocr_mode=False, initial_text="", ocr_match=None):  # Setup the page for the Rectangulator and return the Rectangulator and textbox
+    def open_rectangulator(self, pdf_path, template_folder, root, scanner=False, ocr_mode=False, initial_text="", ocr_match=None, statement_folder=None, statement_template_folder=None):  # Setup the page for the Rectangulator and return the Rectangulator and textbox
         # Reset flags
         self.should_print = True 
         self.should_save = True
@@ -573,6 +725,15 @@ class RectangulatorHandler:
         self.current_page = 0
         self.ocr_mode = bool(ocr_mode)
         self.ocr_match = ocr_match
+        self.statement_mode = False
+        self.statement_match = None
+        self.statement_company = ""
+        self.statement_destination_folder = ""
+        self.statement_root = os.path.abspath(statement_folder or self.config.get("STATEMENT_FOLDER", ""))
+        self.statement_template_folder = statement_template_folder or self.config.get("STATEMENT_TEMPLATE_FOLDER", "")
+        self.statement_ocr_mode = bool(ocr_mode)
+        self.fig.patch.set_facecolor(self.palette["surface"])
+        self.ax.set_facecolor(self.palette["surface"])
 
         # Don't print by default when using scanner
         if scanner:
@@ -617,11 +778,18 @@ class RectangulatorHandler:
         draw_page(self.current_page)
 
 
-        # Create a Not An Invoice button
-        not_inv_button_ax = self.fig.add_axes([0.64, 0.005, 0.18, 0.075])
-        not_inv_button = Button(not_inv_button_ax, "Not An Invoice")
+        # Bottom review controls -------------------------------------------------
+        # Row 1: filename + actions.  Row 2: optional prefix/postfix training
+        # values. Statements are a separate document type but use the same review
+        # surface so the operator never has to leave the PDF.
+        not_inv_button_ax = self.fig.add_axes([0.71, 0.005, 0.13, 0.07])
+        not_inv_button = Button(
+            not_inv_button_ax, "Not Invoice",
+            color=self.palette["danger_soft"], hovercolor="#F5D5D5")
+        not_inv_button.label.set_color(self.palette["danger"])
+        not_inv_button.label.set_fontweight("semibold")
 
-        def not_invoice(event):  # If the user clicks the "Not Invoice" button
+        def not_invoice(event):
             try:
                 self.invoice = False
                 self.ax.clear()
@@ -629,73 +797,209 @@ class RectangulatorHandler:
                 self.fig.canvas.draw_idle()
                 self.done_var.set(1)
             except Exception as e:
-                self.log(f"Error in not_invoice: {str(e)} \n{traceback.format_exc()}")
-                self.done_var.set(1) 
+                self.log(f"Error in not_invoice: {e}\n{traceback.format_exc()}")
+                self.done_var.set(1)
 
         not_inv_button.on_clicked(not_invoice)
 
-        # Create a checkbox for if it should be printed
-        print_checkbox_ax = self.fig.add_axes([0.86, 0.03, 0.03, 0.03])
+        statement_button_ax = self.fig.add_axes([0.57, 0.005, 0.13, 0.07])
+        statement_button = Button(
+            statement_button_ax, "Statements",
+            color=self.palette["warning_soft"], hovercolor="#F8E2B8")
+        statement_button.label.set_color(self.palette["warning"])
+        statement_button.label.set_fontweight("semibold")
+
+        # Print / Save checkboxes
+        print_checkbox_ax = self.fig.add_axes([0.87, 0.025, 0.025, 0.025])
+        print_checkbox_ax.set_facecolor(self.palette["surface_alt"])
         print_checkbox = CheckButtons(print_checkbox_ax, [""], [self.should_print])
         def print_callback(label):
             self.should_print = not self.should_print
         print_checkbox.on_clicked(print_callback)
-        # Set the checkbox to be a square and centered
-        for i, line in enumerate(print_checkbox.lines):
-            rect = print_checkbox.rectangles[i]
-            rect.set_width(1)
-            rect.set_height(1)
-            rect.set_edgecolor("none")
-            # Calculate the center of the rectangle
-            center_x = rect.get_width() / 2
-            center_y = rect.get_height() / 2
-            # Update the line positions to be centered
-            line[0].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
-            line[1].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
-            line[0].set_ydata([center_y - rect.get_height() / 4, center_y + rect.get_height() / 4])
-            line[1].set_ydata([center_y + rect.get_height() / 4, center_y - rect.get_height() / 4])
-        print_label = self.fig.text(0.853, 0.075, "Print?", fontsize=9)
 
-        # Create a checkbox for if it should be saved
-        save_checkbox_ax = self.fig.add_axes([0.93, 0.03, 0.03, 0.03])
+        save_checkbox_ax = self.fig.add_axes([0.935, 0.025, 0.025, 0.025])
+        save_checkbox_ax.set_facecolor(self.palette["surface_alt"])
         save_checkbox = CheckButtons(save_checkbox_ax, [""], [True])
         def save_callback(label):
             self.should_save = not self.should_save
         save_checkbox.on_clicked(save_callback)
-        # Set the checkbox to be a square and centered
-        for i, line in enumerate(save_checkbox.lines):
-            rect = save_checkbox.rectangles[i]
-            rect.set_width(1)
-            rect.set_height(1)
-            rect.set_edgecolor("none")
-            # Calculate the center of the rectangle
-            center_x = rect.get_width() / 2
-            center_y = rect.get_height() / 2
-            # Update the line positions to be centered
-            line[0].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
-            line[1].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
-            line[0].set_ydata([center_y - rect.get_height() / 4, center_y + rect.get_height() / 4])
-            line[1].set_ydata([center_y + rect.get_height() / 4, center_y - rect.get_height() / 4])
-        save_label = self.fig.text(0.92, 0.075, "Save?", fontsize=9)
 
-        # Filename text box and submit button
-        text_box_ax = self.fig.add_axes([0.1, 0.005, 0.35, 0.075])
-        text_box = TextBox(text_box_ax, label="", initial=initial_text or "")
+        # Preserve the old centering tweak only on Matplotlib versions that expose
+        # these implementation details.
+        for check in (print_checkbox, save_checkbox):
+            if hasattr(check, "lines") and hasattr(check, "rectangles"):
+                for i, line in enumerate(check.lines):
+                    rect = check.rectangles[i]
+                    rect.set_width(1)
+                    rect.set_height(1)
+                    rect.set_edgecolor("none")
+                    center_x = rect.get_width() / 2
+                    center_y = rect.get_height() / 2
+                    line[0].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
+                    line[1].set_xdata([center_x - rect.get_width() / 4, center_x + rect.get_width() / 4])
+                    line[0].set_ydata([center_y - rect.get_height() / 4, center_y + rect.get_height() / 4])
+                    line[1].set_ydata([center_y + rect.get_height() / 4, center_y - rect.get_height() / 4])
+
+        print_label = self.fig.text(
+            0.852, 0.066, "Print", fontsize=8, color=self.palette["muted"],
+            fontweight="semibold")
+        save_label = self.fig.text(
+            0.918, 0.066, "Save", fontsize=8, color=self.palette["muted"],
+            fontweight="semibold")
+
+        # Filename text box
+        text_box_ax = self.fig.add_axes([0.08, 0.005, 0.34, 0.07])
+        text_box = TextBox(
+            text_box_ax, label="", initial=initial_text or "",
+            color="#FBFCFC", hovercolor="#FFFFFF")
+        for spine in text_box_ax.spines.values():
+            spine.set_color(self.palette["border"])
+        text_box.text_disp.set_color(self.palette["text"])
         try:
             text_box.set_active(True)
         except Exception as e:
-            self.log(f"Error activating text box: {str(e)} \n{traceback.format_exc()}")
-        text_box.text_disp.set_horizontalalignment('right')
+            self.log(f"Error activating text box: {e}\n{traceback.format_exc()}")
+        text_box.text_disp.set_horizontalalignment("right")
         text_box.text_disp.set_position((0.95, 0.5))
-
-        # 3. Clip the text so anything spilling out the left side is visually hidden
         text_box.text_disp.set_clip_on(True)
         text_box.text_disp.set_clip_box(text_box_ax.bbox)
 
+        # Prefix / postfix fields are training conveniences. They are saved into
+        # PREFIX_VENDORS / POSTFIX_VENDORS when a new invoice template is created.
+        known_vendor = ""
+        if ocr_match:
+            known_vendor = (
+                ocr_match.get("template", {}).get("fields", {}).get("vendor", {}).get("expected")
+                or ocr_match.get("template", {}).get("vendor", "")
+            )
+        prefix_initial = self.get_vendor_prefix(known_vendor) if known_vendor else ""
+        postfix_initial = self.get_vendor_postfix(known_vendor) if known_vendor else ""
+        prefix_ax = self.fig.add_axes([0.58, 0.105, 0.16, 0.045])
+        postfix_ax = self.fig.add_axes([0.78, 0.105, 0.16, 0.045])
+        prefix_box = TextBox(prefix_ax, label="", initial=prefix_initial, color="#FBFCFC", hovercolor="#FFFFFF")
+        postfix_box = TextBox(postfix_ax, label="", initial=postfix_initial, color="#FBFCFC", hovercolor="#FFFFFF")
+        for control_ax, control in ((prefix_ax, prefix_box), (postfix_ax, postfix_box)):
+            for spine in control_ax.spines.values():
+                spine.set_color(self.palette["border"])
+            control.text_disp.set_color(self.palette["text"])
+        prefix_label = self.fig.text(0.58, 0.153, "Prefix (template)", fontsize=8, color=self.palette["muted"], fontweight="semibold")
+        postfix_label = self.fig.text(0.78, 0.153, "Postfix (template)", fontsize=8, color=self.palette["muted"], fontweight="semibold")
+
+        text_box_label = self.fig.text(
+            0.08, 0.082, "Filename - Invoice Date _ Invoice #",
+            fontsize=8.5, color=self.palette["muted"], fontweight="semibold")
+
+        if self.ocr_mode and ocr_match:
+            confidence = ocr_match.get("score", 0.0) * 100
+            line1 = f"- OCR template match: {confidence:.1f}% — review the suggested filename"
+            line2 = "- Edit or paste a filename and Submit; drawing rectangles is optional"
+            line3 = "- To retrain: blue Vendor → amber Date → purple Invoice #; right-click to verify"
+        elif self.ocr_mode:
+            line1 = "- OCR mode: manual filename entry is allowed without creating a template"
+            line2 = "- Optional training: blue Vendor → amber Date → purple Invoice #, then right-click"
+            line3 = "- Prefix / postfix above are saved when you create an invoice template"
+        else:
+            line1 = "- Draw 3 boxes: blue Vendor → amber Date → purple Invoice #"
+            line2 = "- Or type/paste the filename manually if the PDF does not contain every field"
+            line3 = "- Right-click verify  •  Middle-drag pan  •  Scroll zoom"
+        instruction_color = self.palette["warning"] if self.ocr_mode else self.palette["pewter_dark"]
+        instruction_label = self.fig.text(
+            0.08, 0.975, line1, fontsize=9.5, color=instruction_color, fontweight="semibold")
+        instruction_label_2 = self.fig.text(
+            0.08, 0.95, line2, fontsize=9, color=self.palette["text"])
+        instruction_label_3 = self.fig.text(
+            0.08, 0.925, line3, fontsize=9, color=self.palette["muted"])
+
+        def set_statement_instructions(match=None):
+            instruction_label.set_text("- STATEMENT mode: blue Identifier → amber Date (optional template training)")
+            if match:
+                pct = match.get("score", 0.0) * 100
+                instruction_label_2.set_text(
+                    f"- Statement template matched {match.get('company', '')} at {pct:.1f}% — review the filename")
+            else:
+                instruction_label_2.set_text(
+                    "- Folder selected from Statements; type/paste a filename or draw Identifier + Date and right-click")
+            instruction_label_3.set_text("- Statements always save; scanner/MFP statements are not printed")
+            instruction_label.set_color(self.palette["warning"])
+            text_box_label.set_text("Statement filename  •  Company Statement Date")
+            self.fig.canvas.draw_idle()
+
+        def choose_statement(event=None):
+            try:
+                os.makedirs(self.statement_root, exist_ok=True)
+                use_ocr = bool(self.ocr_mode or not self.document_has_embedded_text(pdf_path))
+                match = self.check_statement_templates(
+                    pdf_path, self.statement_template_folder, self.statement_root, ocr=use_ocr)
+                selected_folder = ""
+                company = ""
+                if match:
+                    selected_folder = match.get("destination_folder", "")
+                    company = match.get("company", "")
+                    if selected_folder:
+                        os.makedirs(selected_folder, exist_ok=True)
+                if not selected_folder:
+                    selected_folder = filedialog.askdirectory(
+                        parent=root.root,
+                        title="Choose the company folder for this statement",
+                        initialdir=self.statement_root,
+                        mustexist=True,
+                    )
+                    if not selected_folder:
+                        return
+                    root_abs = os.path.abspath(self.statement_root)
+                    selected_folder = os.path.abspath(selected_folder)
+                    try:
+                        if os.path.commonpath([root_abs, selected_folder]) != root_abs:
+                            self.create_alert("Please choose a company folder inside the configured Statements folder.")
+                            return
+                    except ValueError:
+                        self.create_alert("Please choose a company folder inside the configured Statements folder.")
+                        return
+                    if selected_folder == root_abs:
+                        self.create_alert("Please choose the company's folder, not the Statements root itself.")
+                        return
+                    company = os.path.basename(selected_folder.rstrip("\\/"))
+
+                self.statement_mode = True
+                self.statement_match = match
+                self.statement_company = self.sanitize_filename(company)
+                self.statement_destination_folder = selected_folder
+                self.statement_ocr_mode = use_ocr
+
+                # Statements are always saved. They are printed for ordinary email
+                # intake, but not when the source is the configured scanner/MFP.
+                desired_print = not scanner
+                try:
+                    if bool(print_checkbox.get_status()[0]) != desired_print:
+                        print_checkbox.set_active(0)
+                    if not bool(save_checkbox.get_status()[0]):
+                        save_checkbox.set_active(0)
+                except Exception:
+                    pass
+                self.should_print = desired_print
+                self.should_save = True
+                if self.rectangulator_instance is not None:
+                    self.rectangulator_instance.statement_mode = True
+                    self.rectangulator_instance.statement_ocr_mode = use_ocr
+                    self.rectangulator_instance.reset_rectangles()
+
+                if match and match.get("suggested_filename"):
+                    text_box.set_val(match["suggested_filename"])
+                    self.log(
+                        f"Statement template selected {self.statement_company}; review the date/filename and Submit.",
+                        tag="yellow", display=True)
+                else:
+                    text_box.set_val(f"{self.statement_company} Statement ")
+                    self.log(
+                        f"Statement folder selected: {selected_folder}. You may enter the date manually or train a template.",
+                        tag="yellow", display=True)
+                set_statement_instructions(match)
+            except Exception as exc:
+                self.log(f"Unable to start Statement mode: {exc}\n{traceback.format_exc()}", tag="red", display=True)
+
+        statement_button.on_clicked(choose_statement)
+
         def on_text_submit(event=None):
-            # Runs on the Tk main thread (matplotlib button callback). create_alert
-            # uses wait_window(), which MUST run on the main thread — do not spawn
-            # a worker thread here.
             if self.hit_submit:
                 return
             self.hit_submit = True
@@ -704,51 +1008,54 @@ class RectangulatorHandler:
                 if not entered:
                     self.create_alert("Please enter a filename before submitting.")
                     return
-                if self.ocr_mode and not self.ocr_template_ready:
-                    self.create_alert("Please draw and verify the three OCR rectangles before submitting.")
+                # OCR templates are optional. A manually entered filename is a
+                # complete, valid path through the workflow.
+                if self.statement_mode and not self.statement_destination_folder:
+                    self.create_alert("Choose the Statement company folder first.")
                     return
                 if entered != text_box.text:
                     text_box.set_val(entered)
-                filename_is_correct = self.create_alert(
-                    f"Is '{entered}' the correct filename?")
+                filename_is_correct = self.create_alert(f"Is '{entered}' the correct filename?")
                 if filename_is_correct:
                     self.ax.clear()
                     self.ax.axis("off")
                     self.fig.canvas.draw_idle()
-                    self.done_var.set(1)  # signal that the user is done
+                    self.done_var.set(1)
             finally:
                 self.hit_submit = False
 
-        submit_button_ax = self.fig.add_axes([0.45, 0.005, 0.15, 0.075])
-        submit_button = Button(submit_button_ax, "Submit")
+        submit_button_ax = self.fig.add_axes([0.43, 0.005, 0.13, 0.07])
+        submit_button = Button(
+            submit_button_ax, "Submit", color=self.palette["accent"],
+            hovercolor=self.palette["accent_hover"])
+        submit_button.label.set_color("#FFFFFF")
+        submit_button.label.set_fontweight("semibold")
         submit_button.on_clicked(on_text_submit)
 
-        # Create text labels for instructions and text box
-        text_box_label = self.fig.text(
-            0.1,
-            0.089,
-            "Enter Filename Manually (mm-dd-yy_invoice#)",
-            fontsize=10)
-        if self.ocr_mode and ocr_match:
-            confidence = ocr_match.get("score", 0.0) * 100
-            line1 = f"- OCR template match: {confidence:.1f}% confidence — review the suggested filename below"
-            line2 = "- OCR never renames automatically; edit the suggestion if needed, then click Submit"
-            line3 = "- You may draw three new rectangles and right-click if this OCR template needs retraining"
-        elif self.ocr_mode:
-            line1 = "- OCR mode: draw boxes around Company Name, Date, and Invoice (in that order)"
-            line2 = "- Right-click to OCR/verify the selections and create a separate OCR template"
-            line3 = "- The OCR attempt will fill the filename box; review/edit it, then click Submit"
-        else:
-            line1 = "- Left Click to Draw boxes around Company Name, Date, and Invoice (in that order)"
-            line2 = "- Company Name can be any piece of text unique to that vendor"
-            line3 = "- Right Click to verify and save, Middle Click to Pan, Scroll to Zoom"
-        instruction_label = self.fig.text(0.1, 0.975, line1, fontsize=10)
-        instruction_label_2 = self.fig.text(0.1, 0.95, line2, fontsize=10)
-        instruction_label_3 = self.fig.text(0.1, 0.925, line3, fontsize=10)
-        
-        # Create next and previous page buttons
+        # Matplotlib's TextBox does not consistently receive Ctrl+V on TkAgg.
+        # Bind the underlying Tk canvas so clipboard paste works reliably.
+        canvas_widget = self.fig.canvas.get_tk_widget()
+        paste_bindings = []
+        def paste_filename(_event=None):
+            try:
+                clip = root.root.clipboard_get()
+            except (tk.TclError, AttributeError):
+                return "break"
+            text_box.set_val(f"{text_box.text}{clip}")
+            return "break"
+        for sequence in ("<Control-v>", "<Control-V>", "<Shift-Insert>"):
+            try:
+                bind_id = canvas_widget.bind(sequence, paste_filename, add="+")
+                paste_bindings.append((sequence, bind_id))
+            except tk.TclError:
+                pass
+
+        # Page navigation
         prev_button_ax = self.fig.add_axes([0.02, 0.45, 0.04, 0.1])
-        prev_button = Button(prev_button_ax, "<")
+        prev_button = Button(
+            prev_button_ax, "‹", color=self.palette["surface_alt"], hovercolor="#E8EDF0")
+        prev_button.label.set_color(self.palette["pewter_dark"])
+        prev_button.label.set_fontsize(14)
         def on_prev(event):
             if self.current_page > 0:
                 self.current_page -= 1
@@ -756,7 +1063,10 @@ class RectangulatorHandler:
         prev_button.on_clicked(on_prev)
 
         next_button_ax = self.fig.add_axes([0.94, 0.45, 0.04, 0.1])
-        next_button = Button(next_button_ax, ">")
+        next_button = Button(
+            next_button_ax, "›", color=self.palette["surface_alt"], hovercolor="#E8EDF0")
+        next_button.label.set_color(self.palette["pewter_dark"])
+        next_button.label.set_fontsize(14)
         def on_next(event):
             if self.current_page < self.total_pages - 1:
                 self.current_page += 1
@@ -764,16 +1074,39 @@ class RectangulatorHandler:
         next_button.on_clicked(on_next)
 
         self.fig.canvas.draw_idle()
-        rectangulator = Rectangulator(self.ax, self.fig, pdf_path, template_folder, self, text_box=text_box, ocr_mode=self.ocr_mode)
+        rectangulator = Rectangulator(
+            self.ax, self.fig, pdf_path, template_folder, self,
+            text_box=text_box, ocr_mode=self.ocr_mode,
+            prefix_box=prefix_box, postfix_box=postfix_box,
+            statement_template_folder=self.statement_template_folder,
+            statement_root=self.statement_root,
+        )
         self.rectangulator_instance = rectangulator
         rectangulator.page_num = self.current_page
-        root.root.wait_variable(self.done_var)  # wait for the user to finish
+        root.root.wait_variable(self.done_var)
 
-        # Remove the text labels and rectangles
-        for ax in [text_box_ax, not_inv_button_ax, print_checkbox_ax, save_checkbox_ax, submit_button_ax, prev_button_ax, next_button_ax]:
-            self.fig.delaxes(ax)
-        for label in [text_box_label, instruction_label, instruction_label_2, instruction_label_3, print_label, save_label]:
-            label.remove()
+        # Cleanup controls and callbacks before the next queued document.
+        for sequence, bind_id in paste_bindings:
+            try:
+                canvas_widget.unbind(sequence, bind_id)
+            except (tk.TclError, TypeError):
+                pass
+        for control_ax in [
+            text_box_ax, prefix_ax, postfix_ax, not_inv_button_ax, statement_button_ax,
+            print_checkbox_ax, save_checkbox_ax, submit_button_ax, prev_button_ax, next_button_ax,
+        ]:
+            try:
+                self.fig.delaxes(control_ax)
+            except (KeyError, ValueError):
+                pass
+        for label in [
+            text_box_label, prefix_label, postfix_label, instruction_label,
+            instruction_label_2, instruction_label_3, print_label, save_label,
+        ]:
+            try:
+                label.remove()
+            except ValueError:
+                pass
         for cid in rectangulator.cids:
             self.fig.canvas.mpl_disconnect(cid)
         rectangulator.cids.clear()
@@ -895,18 +1228,19 @@ class RectangulatorHandler:
             self.log(f"An error occurred while processing the PDF: {e} {traceback.format_exc()}", tag="red")
             return ""
 
-    def get_vendor_prefix(self, identifier):  # Get the prefix for a vendor if it exists in the config
-        # Parses pairs like "VendorA:VA-, VendorB:VB-"
-        prefix_str = self.config.get("PREFIX_VENDORS", "")
-        if not prefix_str:
-            return ""
-            
-        pairs = [p.strip() for p in prefix_str.split(",") if ":" in p]
-        for pair in pairs:
-            vendor, prefix = pair.split(":", 1)
-            if vendor.strip() == identifier.strip():
-                return prefix.strip()
+    def get_vendor_rule(self, setting_key, identifier):
+        raw = str(self.config.get(setting_key, "") or "")
+        for pair in [p.strip() for p in raw.split(",") if ":" in p]:
+            vendor, value = pair.split(":", 1)
+            if vendor.strip().casefold() == str(identifier or "").strip().casefold():
+                return value.strip()
         return ""
+
+    def get_vendor_prefix(self, identifier):
+        return self.get_vendor_rule("PREFIX_VENDORS", identifier)
+
+    def get_vendor_postfix(self, identifier):
+        return self.get_vendor_rule("POSTFIX_VENDORS", identifier)
 
     def check_date_outlier(self, invoice_name, invoice_date):  # Check if the date is an outlier and correct it
         calendar = {
@@ -973,37 +1307,40 @@ class RectangulatorHandler:
         return self.clean_date(invoice_date.strip())
 
     def clean_date(self, invoice_date):  # Clean the date to be in the format "MM-DD-YY"
+        raw = " ".join(str(invoice_date or "").strip().split())
         date_patterns = [
-            "%B %d, %Y",
-            "%b %d, %Y",
-            "%B %d, %y",
-            "%b %d, %y",
-            "%d-%B-%Y",
-            "%d-%b-%Y",
-            "%d-%B-%y",
-            "%d-%b-%y",
-            "%m-%d-%Y",
-            "%m-%d-%y",
-            "%b %d %Y",
-            "%B %d %Y",
-            "%b %d %y",
-            "%B %d %y",
-            "%m/%d/%Y",
-            "%m/%d/%y",
-            "%Y-%m-%d",
-            "%y-%m-%d",
-            "%Y/%m/%d",
-            "%y/%m/%d"
+            "%B %d, %Y", "%b %d, %Y", "%B %d, %y", "%b %d, %y",
+            "%B %d %Y", "%b %d %Y", "%B %d %y", "%b %d %y",
+            "%d-%B-%Y", "%d-%b-%Y", "%d-%B-%y", "%d-%b-%y",
+            "%d %B %Y", "%d %b %Y", "%d %B %y", "%d %b %y",
+            "%m-%d-%Y", "%m-%d-%y", "%m/%d/%Y", "%m/%d/%y",
+            "%Y-%m-%d", "%y-%m-%d", "%Y/%m/%d", "%y/%m/%d",
         ]
-        invoice_date = str(invoice_date).replace("/", "-")
-        for pattern in date_patterns:
-            try:
-                dt = datetime.strptime(invoice_date, pattern)
-                return dt.strftime("%m-%d-%y")
-            except ValueError:
-                continue
-        self.log(f"Could not convert {invoice_date} to date")
-        return invoice_date
+
+        candidates = [raw]
+        # Rectangles sometimes include labels such as "Statement Date:" or
+        # "Invoice Date:". Pull likely date substrings out before giving up.
+        date_regexes = [
+            r"(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{2,4}",
+            r"\d{1,2}[- ](?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[- ,]+\d{2,4}",
+            r"\d{1,4}[/-]\d{1,2}[/-]\d{1,4}",
+        ]
+        for pattern in date_regexes:
+            match = re.search(pattern, raw, re.I)
+            if match:
+                candidate = match.group(0).replace("Sept ", "Sep ").replace("Sept-", "Sep-")
+                if candidate not in candidates:
+                    candidates.append(candidate)
+
+        for candidate in candidates:
+            for pattern in date_patterns:
+                try:
+                    dt = datetime.strptime(candidate, pattern)
+                    return dt.strftime("%m-%d-%y")
+                except ValueError:
+                    continue
+        self.log(f"Could not convert {raw} to date")
+        return raw
 
     def send_email(self, body, root):  # Sends email to me
         if root:
@@ -1050,14 +1387,21 @@ class RectangulatorHandler:
 
 class Rectangulator:
 
-    def __init__(self, ax, fig, pdf_path, template_folder, rectangulator_handler, text_box=None, ocr_mode=False):
+    def __init__(self, ax, fig, pdf_path, template_folder, rectangulator_handler, text_box=None, ocr_mode=False,
+                 prefix_box=None, postfix_box=None, statement_template_folder=None, statement_root=None):
         self.rectangulator_handler = rectangulator_handler
         self.pdf_path = pdf_path
         self.template_folder = template_folder
         self.fig = fig
         self.ax = ax
         self.text_box = text_box
+        self.prefix_box = prefix_box
+        self.postfix_box = postfix_box
         self.ocr_mode = bool(ocr_mode)
+        self.statement_mode = False
+        self.statement_ocr_mode = False
+        self.statement_template_folder = statement_template_folder or rectangulator_handler.config.get("STATEMENT_TEMPLATE_FOLDER", "")
+        self.statement_root = statement_root or rectangulator_handler.config.get("STATEMENT_FOLDER", "")
 
         self.rectangles = []  # contains rectangle objects
         self.coordinates = []  # contains coordinates of rectangle objects
@@ -1118,6 +1462,21 @@ class Rectangulator:
         vendor = self.rectangulator_handler.sanitize_filename(extracted[0])
         if not vendor:
             return False
+
+        prefix = str(self.prefix_box.text if self.prefix_box is not None else "").strip()
+        postfix = str(self.postfix_box.text if self.postfix_box is not None else "").strip()
+        if prefix or postfix:
+            root = self.rectangulator_handler.root
+            if root and hasattr(root, "update_vendor_affixes"):
+                root.update_vendor_affixes(
+                    vendor,
+                    prefix=prefix if prefix else None,
+                    postfix=postfix if postfix else None,
+                )
+                # refresh_config picks up the persisted rule before rename_pdf
+                # constructs this very invoice's filename.
+                self.rectangulator_handler.refresh_config()
+
         os.makedirs(self.template_folder, exist_ok=True)
         safe_vendor = re.sub(r"[^A-Za-z0-9_. -]+", "_", vendor).strip() or "template"
         suffix = "ocr" if ocr else "text"
@@ -1147,7 +1506,84 @@ class Rectangulator:
         )
         return True
 
+    def save_statement_template(self):
+        if len(self.rectangles) != 2:
+            return False
+        ocr = bool(self.statement_ocr_mode)
+        extracted = [
+            self.rectangulator_handler.get_text_in_rect(
+                rect, self.pdf_path, self.page_num, ocr=ocr
+            ) for rect in self.rectangles
+        ]
+        if not all(extracted):
+            self.rectangulator_handler.log(
+                "Identifier or statement date was empty; Statement template was not created.",
+                tag="orange", display=True)
+            return False
+
+        company = self.rectangulator_handler.sanitize_filename(
+            self.rectangulator_handler.statement_company)
+        destination = os.path.abspath(
+            self.rectangulator_handler.statement_destination_folder or "")
+        root = os.path.abspath(self.statement_root or "")
+        if not company or not destination or not root:
+            return False
+        try:
+            if os.path.commonpath([root, destination]) != root:
+                return False
+        except ValueError:
+            return False
+
+        rel_folder = os.path.relpath(destination, root)
+        folder = os.path.abspath(self.statement_template_folder)
+        os.makedirs(folder, exist_ok=True)
+        safe_company = re.sub(r"[^A-Za-z0-9_. -]+", "_", company).strip() or "statement"
+        filename = os.path.join(folder, f"{safe_company}.statement.json")
+        fields = {
+            "identifier": self.rectangulator_handler.normalized_field(
+                self.rectangles[0], self.pdf_path, self.page_num, extracted[0]),
+            "date": self.rectangulator_handler.normalized_field(
+                self.rectangles[1], self.pdf_path, self.page_num, extracted[1]),
+        }
+        variant = {
+            "company": company,
+            "folder": rel_folder,
+            "ocr": ocr,
+            "fields": fields,
+        }
+        payload = {"version": 1, "type": "statement", "company": company, "templates": []}
+        if os.path.exists(filename):
+            try:
+                with open(filename, "r", encoding="utf-8") as f:
+                    old = json.load(f)
+                if old.get("type") == "statement":
+                    payload = old
+                    payload.setdefault("templates", [])
+            except Exception:
+                pass
+        payload["templates"].append(variant)
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        self.rectangulator_handler.invalidate_template_cache(folder)
+        self.rectangulator_handler.log(
+            f"Created {'OCR ' if ocr else ''}Statement template {filename}",
+            tag="lgreen", display=True)
+        return True
+
     def on_key_press(self, event):  # Handle key press events
+        # Matplotlib TextBox does not implement clipboard paste consistently on
+        # TkAgg. Handle Ctrl+V here when the filename box is the active typing
+        # target. The Tk-level binding in open_rectangulator is retained as an
+        # additional Windows fallback.
+        if str(getattr(event, "key", "")).lower() in ("ctrl+v", "cmd+v"):
+            if self.text_box is not None and getattr(self.text_box, "capturekeystrokes", False):
+                try:
+                    clip = self.rectangulator_handler.root.root.clipboard_get()
+                    self.text_box.set_val(f"{self.text_box.text}{clip}")
+                except (tk.TclError, AttributeError):
+                    pass
+            return
+
         if event.key == "escape":  # reset zoom and position
             page_rect = getattr(self.rectangulator_handler, "page_rect", None)
             if page_rect is not None:
@@ -1170,24 +1606,32 @@ class Rectangulator:
             if event.xdata is None or event.ydata is None:
                 return
 
-            # Start drawing a rectangle
+            # Start drawing a rectangle. Each required field has a consistent
+            # color so the selection order is visible at a glance.
             self.start_x = event.xdata
             self.start_y = event.ydata
-            self.rect = Rectangle((self.start_x, self.start_y), 0, 0, edgecolor="red", linewidth=2, fill=False)
+            if self.correcting_rect_index is not None:
+                field_index = self.correcting_rect_index
+            else:
+                field_index = min(len(self.rectangles), 2)
+            edge_color = self.rectangulator_handler.field_colors[field_index]
+            self.rect = Rectangle(
+                (self.start_x, self.start_y), 0, 0, edgecolor=edge_color,
+                linewidth=2.2, fill=False)
             self.ax.add_patch(self.rect)
             self.ax.figure.canvas.draw()
 
         elif event.button == 2:  # middle mouse button, pan
             self.pan_start = (event.x, event.y)
 
-        elif event.button == 3:  # right mouse button, save rectangles
-            # Check if 3 rectangles have been drawn
-            if len(self.rectangles) != 3:
+        elif event.button == 3:  # right mouse button, verify / save rectangles
+            required = 2 if self.statement_mode else 3
+            if len(self.rectangles) != required:
+                label = "two (Identifier and Date)" if self.statement_mode else "three"
                 self.rectangulator_handler.log(
-                    "Please draw exactly three rectangles", display=True)
+                    f"Please draw exactly {label} rectangles", display=True)
                 self.reset_rectangles()
                 return
-            
             self.verify_selection()
 
     def on_button_release(self, event):  # Handle key release events
@@ -1307,50 +1751,76 @@ class Rectangulator:
             self.coordinates.insert(self.correcting_rect_index, corrected_coord)
             self.correcting_rect_index = None
 
-        headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
-        extracted_values = []
-        for rect in self.rectangles:
-            extracted_values.append(
-                self.rectangulator_handler.get_text_in_rect(
-                    rect, self.pdf_path, self.page_num, ocr=self.ocr_mode
-                )
-            )
+        if self.statement_mode:
+            headers = ["--- Statement Identifier: ", "--- Statement Date: "]
+            use_ocr = bool(self.statement_ocr_mode)
+        else:
+            headers = ["--- Company Name: ", "--- Invoice Date: ", "--- Invoice Number: "]
+            use_ocr = bool(self.ocr_mode)
+
+        extracted_values = [
+            self.rectangulator_handler.get_text_in_rect(
+                rect, self.pdf_path, self.page_num, ocr=use_ocr
+            ) for rect in self.rectangles
+        ]
         extracted_text = "\n".join(h + v for h, v in zip(headers, extracted_values))
         text_is_correct = self.rectangulator_handler.create_alert(
             f"Does the following text match what you selected?\n\n{extracted_text}",
-            numbered_buttons=3,
+            numbered_buttons=len(headers),
         )
 
         if isinstance(text_is_correct, int) and not isinstance(text_is_correct, bool):
-            self.correcting_rect_index = text_is_correct
-            self.rectangulator_handler.log(f"Please reselect {headers[self.correcting_rect_index]}")
-            self.reset_rectangles(specific_rect=self.correcting_rect_index)
+            if 0 <= text_is_correct < len(headers):
+                self.correcting_rect_index = text_is_correct
+                self.rectangulator_handler.log(
+                    f"Please reselect {headers[self.correcting_rect_index]}")
+                self.reset_rectangles(specific_rect=self.correcting_rect_index)
             return
 
-        if text_is_correct:
-            if self.ocr_mode:
-                if not all(extracted_values):
-                    self.rectangulator_handler.log("OCR did not read all three selections. Please redraw the empty field.", tag="orange")
-                    return
-                if self.save_template(ocr=True):
-                    suggestion = self.rectangulator_handler.build_filename_from_fields(*extracted_values)
-                    self.rectangulator_handler.ocr_template_ready = True
-                    if self.text_box is not None:
-                        self.text_box.set_val(suggestion)
-                    self.rectangulator_handler.log(
-                        f"OCR suggested '{suggestion}'. Review/edit the filename and click Submit.",
-                        tag="yellow", display=True,
-                    )
-                    # Keep the window open: the user is always the final authority.
-                    self.reset_rectangles()
+        if not text_is_correct:
+            self.rectangulator_handler.log("Please reselect rectangles", display=True)
+            self.reset_rectangles()
+            return
+
+        if self.statement_mode:
+            if not all(extracted_values):
+                self.rectangulator_handler.log(
+                    "The identifier and date must both be readable to create a Statement template. "
+                    "You can still type the filename manually and Submit.",
+                    tag="orange", display=True)
                 return
-
-            self.ax.clear()
-            self.ax.axis("off")
-            self.fig.canvas.draw_idle()
-            self.rectangulator_handler.done_var.set(1)
+            if self.save_statement_template():
+                suggestion = self.rectangulator_handler.build_statement_filename(
+                    self.rectangulator_handler.statement_company, extracted_values[1])
+                if self.text_box is not None:
+                    self.text_box.set_val(suggestion)
+                self.rectangulator_handler.log(
+                    f"Statement template trained. Suggested filename: '{suggestion}'. Review/edit and Submit.",
+                    tag="yellow", display=True)
+                self.reset_rectangles()
             return
 
-        self.rectangulator_handler.log("Please reselect rectangles", display=True)
-        self.reset_rectangles()
+        if self.ocr_mode:
+            if not all(extracted_values):
+                self.rectangulator_handler.log(
+                    "OCR did not read all three selections. Redraw the empty field, or simply enter the filename manually.",
+                    tag="orange", display=True)
+                return
+            if self.save_template(ocr=True):
+                suggestion = self.rectangulator_handler.build_filename_from_fields(*extracted_values)
+                self.rectangulator_handler.ocr_template_ready = True
+                if self.text_box is not None:
+                    self.text_box.set_val(suggestion)
+                self.rectangulator_handler.log(
+                    f"OCR suggested '{suggestion}'. Review/edit the filename and click Submit.",
+                    tag="yellow", display=True)
+                self.reset_rectangles()
+            return
+
+        # Native invoice template: right-click confirmation keeps the original
+        # behavior of immediately completing the review.
+        self.ax.clear()
+        self.ax.axis("off")
+        self.fig.canvas.draw_idle()
+        self.rectangulator_handler.done_var.set(1)
 
