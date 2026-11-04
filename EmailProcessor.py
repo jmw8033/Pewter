@@ -520,7 +520,10 @@ class EmailProcessor:
 
             self.figure = Figure(figsize=(9, 9.5), dpi=100, facecolor=self.palette["surface"])
             self.ax = self.figure.add_subplot(111)
-            self.figure.subplots_adjust(left=0.05, right=0.95, top=0.90, bottom=0.18)
+            # PDF view area. Runs between the page-navigation arrows (0.02–0.06 /
+            # 0.94–0.98), just under the instruction text (~0.925) and just above
+            # the prefix/postfix row (top of labels ~0.165).
+            self.figure.subplots_adjust(left=0.065, right=0.935, top=0.915, bottom=0.172)
             self.ax.set_facecolor(self.palette["surface"])
             self.ax.axis("off")
             self.ax.text(

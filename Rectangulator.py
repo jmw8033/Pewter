@@ -53,6 +53,61 @@ config.setdefault("PRINTER_NAME", "")
 config.setdefault("MIN_EMBEDDED_TEXT_CHARS", 40)
 config.setdefault("POSTFIX_VENDORS", "")
 
+try:
+    from matplotlib.image import AxesImage
+    from matplotlib.backends.backend_agg import RendererAgg
+except Exception:  # pragma: no cover - matplotlib always provides these
+    AxesImage = None
+    RendererAgg = None
+
+
+if AxesImage is not None:
+    class PageImage(AxesImage):
+        """AxesImage with a fast path for the PDF page bitmap.
+
+        render_view() renders the page at the screen's own resolution, so the
+        bitmap normally maps 1:1 onto screen pixels. In that case resampling
+        through matplotlib's general image pipeline (the cost of nearly every
+        redraw, scaling with bitmap size) is unnecessary: the pixels are copied
+        straight into the Agg buffer, clipped to the axes. Any other situation
+        (mid-zoom before the re-render arrives, a non-Agg renderer, extreme zoom
+        beyond MAX_RENDER_ZOOM) falls back to the normal matplotlib drawing.
+        """
+
+        _fast_rgba = None  # bottom-up RGBA copy of the bitmap, set by set_page_bitmap
+
+        def set_page_bitmap(self, rgb):
+            self.set_data(rgb)
+            h, w = rgb.shape[:2]
+            rgba = np.empty((h, w, 4), dtype=np.uint8)
+            rgba[..., :3] = rgb[..., :3]
+            rgba[..., 3] = 255
+            # Agg's draw_image expects the first row to be the bottom row.
+            self._fast_rgba = np.ascontiguousarray(rgba[::-1])
+
+        def draw(self, renderer, *args, **kwargs):
+            rgba = self._fast_rgba
+            if (rgba is not None and self.get_visible() and RendererAgg is not None
+                    and isinstance(renderer, RendererAgg) and self.axes is not None):
+                try:
+                    left, right, bottom, top = self.get_extent()
+                    (dx0, dy0), (dx1, dy1) = self.axes.transData.transform(
+                        [(left, bottom), (right, top)])
+                    h, w = rgba.shape[:2]
+                    if abs(abs(dx1 - dx0) - w) <= 1.0 and abs(abs(dy1 - dy0) - h) <= 1.0:
+                        gc = renderer.new_gc()
+                        gc.set_clip_rectangle(self.axes.bbox.frozen())
+                        renderer.draw_image(gc, round(min(dx0, dx1)), round(min(dy0, dy1)), rgba)
+                        gc.restore()
+                        self.stale = False
+                        return
+                except Exception:
+                    pass  # fall through to the regular pipeline
+            return super().draw(renderer, *args, **kwargs)
+else:
+    PageImage = None
+
+
 def get_password(username):
     password = keyring.get_password("PewterInvoiceProcessor", username)
     if password is None:
@@ -64,12 +119,19 @@ def get_password(username):
 class RectangulatorHandler:
 
     # Rendering quality knobs. The visible region is re-rendered by PyMuPDF at
-    # roughly the canvas's own pixel resolution, so text stays sharp no matter
-    # how far you zoom in. SUPERSAMPLE > 1 renders extra detail so small zoom
-    # steps don't each need a fresh render.
-    SUPERSAMPLE = 2.0
+    # the canvas's own pixel resolution, so text stays sharp no matter how far
+    # you zoom in. SUPERSAMPLE = 1.0 keeps the bitmap 1:1 with the screen, which
+    # lets PageImage copy it straight to the canvas instead of resampling it on
+    # every redraw (the main cause of laggy panning). Values above 1 render
+    # extra detail but make every redraw and render proportionally slower.
+    SUPERSAMPLE = 1.0
+    MIN_RENDER_ZOOM = 0.1
     MAX_RENDER_ZOOM = 16.0
     MAX_RENDER_PIXELS = 16_000_000
+    # Extra page area rendered around the visible view (fraction of the view
+    # size on each side). Panning then reveals already-rendered content instead
+    # of blank white while waiting for the next re-render.
+    RENDER_MARGIN = 0.35
 
     def __init__(self, root, fig, ax):
         self.queue = []
@@ -1110,7 +1172,15 @@ class RectangulatorHandler:
         for cid in rectangulator.cids:
             self.fig.canvas.mpl_disconnect(cid)
         rectangulator.cids.clear()
+        if self._render_job is not None:
+            try:
+                root.root.after_cancel(self._render_job)
+            except Exception:
+                pass
+            self._render_job = None
+        self.clear_view_cache()
         self.ax.clear()
+        self.page_image = None
         self.ax.axis("off")
         self.fig.canvas.draw_idle()
 
@@ -1121,6 +1191,12 @@ class RectangulatorHandler:
         # canvas can actually display. The image is placed with an extent
         # measured in PDF points, so axes data coordinates always match
         # page.get_text("words") output -- existing templates keep working.
+        #
+        # The view always fills the entire axes area at a single uniform scale
+        # (aspect="auto" + fit_view_limits). Previously imshow forced
+        # aspect="equal", which shrank the axes to a page-shaped box; when
+        # zoomed in, everything outside that box was cut off even though the
+        # review pane had plenty of empty space on either side.
         if self.page_rect is None or not self.pdf_path:
             return
         doc = None
@@ -1129,27 +1205,47 @@ class RectangulatorHandler:
                 xlim = self.ax.get_xlim()
             if ylim is None:
                 ylim = self.ax.get_ylim()
+            xlim, ylim = self.fit_view_limits(xlim, ylim)
             x0, x1 = sorted(xlim)
             y0, y1 = sorted(ylim)
+            view = fitz.Rect(x0, y0, x1, y1)
 
-            clip = fitz.Rect(x0, y0, x1, y1) & self.page_rect
-            if clip.is_empty or clip.width <= 0 or clip.height <= 0:
+            visible = view & self.page_rect
+            if visible.is_empty or visible.width <= 0 or visible.height <= 0:
+                # Panned completely off the page: keep the limits, nothing to render.
+                self.ax.set_xlim(xlim)
+                self.ax.set_ylim(ylim)
+                self.fig.canvas.draw_idle()
                 return
 
-            # Points-to-screen-pixels scale for the current view
+            # Screen pixels per PDF point. The scale is uniform in both
+            # directions because fit_view_limits matched the axes' shape.
             bbox = self.ax.get_window_extent()
-            scale = min(max(bbox.width, 1.0) / clip.width,
-                        max(bbox.height, 1.0) / clip.height)
-            zoom = max(1.0, min(scale * self.SUPERSAMPLE, self.MAX_RENDER_ZOOM))
+            scale = max(bbox.width, 1.0) / max(view.width, 1e-6)
+            zoom = max(self.MIN_RENDER_ZOOM, min(scale * self.SUPERSAMPLE, self.MAX_RENDER_ZOOM))
 
-            # Keep the bitmap within a sane memory budget
+            # Render a margin around the view so short pans stay filled in.
+            mx = view.width * self.RENDER_MARGIN
+            my = view.height * self.RENDER_MARGIN
+            clip = fitz.Rect(view.x0 - mx, view.y0 - my, view.x1 + mx, view.y1 + my) & self.page_rect
+
+            # Keep the bitmap within a sane memory budget: drop the margin
+            # first, and only then lower the render resolution.
             pixels = (clip.width * zoom) * (clip.height * zoom)
+            if pixels > self.MAX_RENDER_PIXELS:
+                clip = visible
+                pixels = (clip.width * zoom) * (clip.height * zoom)
             if pixels > self.MAX_RENDER_PIXELS:
                 zoom *= (self.MAX_RENDER_PIXELS / pixels) ** 0.5
 
-            doc = fitz.open(self.pdf_path)
-            page = doc[min(max(self.current_page, 0), len(doc) - 1)]
-            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+            matrix = fitz.Matrix(zoom, zoom)
+            display_list = self._get_display_list()
+            if display_list is not None:
+                pix = display_list.get_pixmap(matrix=matrix, clip=clip, alpha=False)
+            else:
+                doc = fitz.open(self.pdf_path)
+                page = doc[min(max(self.current_page, 0), len(doc) - 1)]
+                pix = page.get_pixmap(matrix=matrix, clip=clip)
             img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
 
             # pix.irect is in the zoomed space; divide back into PDF points.
@@ -1158,20 +1254,145 @@ class RectangulatorHandler:
             extent = [ir[0] / zoom, ir[2] / zoom, ir[3] / zoom, ir[1] / zoom]
 
             if self.page_image is None:
-                self.page_image = self.ax.imshow(img_array, extent=extent)
+                if PageImage is not None:
+                    self.page_image = PageImage(
+                        self.ax, origin="upper", extent=extent, interpolation="antialiased")
+                    self.page_image.set_page_bitmap(img_array)
+                    self.ax.add_image(self.page_image)
+                else:
+                    self.page_image = self.ax.imshow(img_array, extent=extent, aspect="auto")
                 self.ax.axis("off")
             else:
-                self.page_image.set_data(img_array)
+                if hasattr(self.page_image, "set_page_bitmap"):
+                    self.page_image.set_page_bitmap(img_array)
+                else:
+                    self.page_image.set_data(img_array)
                 self.page_image.set_extent(extent)
-                # set_extent can rescale the axes; restore the user's view
-                self.ax.set_xlim(xlim)
-                self.ax.set_ylim(ylim)
+            # imshow / set_extent can rescale the axes; apply the fitted view.
+            self.ax.set_aspect("auto")
+            self.ax.set_xlim(xlim)
+            self.ax.set_ylim(ylim)
             self.fig.canvas.draw_idle()
         except Exception as e:
             self.log(f"Error rendering page view: {str(e)} \n{traceback.format_exc()}")
         finally:
             if doc:
                 doc.close()
+
+    def fit_view_limits(self, xlim, ylim):
+        """Expand the requested limits so they fill the whole axes area.
+
+        The requested region stays fully visible and centred; the shorter
+        dimension is widened so one PDF point maps to the same number of screen
+        pixels horizontally and vertically (no stretching). Axis direction is
+        preserved, so the inverted y-axis used for PDF coordinates still works.
+        """
+        try:
+            # Make sure the axes occupy their full allotted box (no leftover
+            # shrinking from a previous aspect="equal" image).
+            self.ax.set_aspect("auto")
+            self.ax.apply_aspect()
+        except Exception:
+            pass
+        bbox = self.ax.get_window_extent()
+        w_px = max(float(bbox.width), 1.0)
+        h_px = max(float(bbox.height), 1.0)
+
+        xa, xb = map(float, xlim)
+        ya, yb = map(float, ylim)
+        width = max(abs(xb - xa), 1e-6)
+        height = max(abs(yb - ya), 1e-6)
+        points_per_px = max(width / w_px, height / h_px)
+        cx = (xa + xb) / 2.0
+        cy = (ya + yb) / 2.0
+        half_w = points_per_px * w_px / 2.0
+        half_h = points_per_px * h_px / 2.0
+
+        new_xlim = (cx - half_w, cx + half_w) if xb >= xa else (cx + half_w, cx - half_w)
+        new_ylim = (cy - half_h, cy + half_h) if yb >= ya else (cy + half_h, cy - half_h)
+        return new_xlim, new_ylim
+
+    def _get_display_list(self):
+        """Return a cached PyMuPDF display list for the current page.
+
+        The PDF is read into memory once and each page is parsed once, so
+        re-renders after a pan or zoom skip re-opening the file, re-parsing the
+        page and re-decoding scanned images. Opening from bytes means no file
+        handle is held, so the PDF can still be renamed/moved on Windows. The
+        cache is rebuilt if the path changes or the file is modified.
+        Returns None on any failure; render_view then falls back to opening
+        the file directly as before.
+        """
+        try:
+            path = self.pdf_path
+            try:
+                st = os.stat(path)
+                signature = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                signature = None
+            cache = getattr(self, "_view_cache", None)
+            if not cache or cache["path"] != path or cache["signature"] != signature:
+                self.clear_view_cache()
+                with open(path, "rb") as f:
+                    data = f.read()
+                cache = self._view_cache = {
+                    "path": path,
+                    "signature": signature,
+                    "doc": fitz.open(stream=data, filetype="pdf"),
+                    "lists": {},
+                }
+            doc = cache["doc"]
+            page_num = min(max(self.current_page, 0), len(doc) - 1)
+            display_list = cache["lists"].get(page_num)
+            if display_list is None:
+                display_list = doc[page_num].get_displaylist()
+                cache["lists"][page_num] = display_list
+            return display_list
+        except Exception:
+            self.clear_view_cache()
+            return None
+
+    def clear_view_cache(self):
+        cache = getattr(self, "_view_cache", None)
+        self._view_cache = None
+        if cache:
+            try:
+                cache["lists"].clear()
+                cache["doc"].close()
+            except Exception:
+                pass
+
+    def draw_view_fast(self):
+        """Redraw only the PDF view area and push just that region to screen.
+
+        Used while panning and drawing boxes. A full canvas draw also re-renders
+        every button, text box and label and copies the whole window to Tk;
+        this skips all of that. Falls back to draw_idle where blitting isn't
+        available.
+        """
+        canvas = self.fig.canvas
+        try:
+            if not getattr(canvas, "supports_blit", True) or not hasattr(canvas, "copy_from_bbox"):
+                raise AttributeError("canvas cannot blit")
+            renderer = canvas.get_renderer()
+            # The axes frame is switched off, so its background patch is not
+            # drawn by ax.draw(); paint it explicitly to clear the old frame.
+            self.ax.patch.draw(renderer)
+            self.ax.draw(renderer)
+            canvas.blit(self.ax.bbox)
+        except Exception:
+            canvas.draw_idle()
+
+    def flush_render(self):
+        """Run a pending re-render now (e.g. before a pan starts), so the
+        bitmap matches the current zoom and the fast drawing path applies."""
+        if getattr(self, "_render_job", None) is not None:
+            try:
+                self.root.root.after_cancel(self._render_job)
+            except Exception:
+                pass
+            self._render_job = None
+            self.render_view()
 
     def schedule_render(self, delay=120):
         # Coalesce bursts of scroll / pan / resize events into one re-render
@@ -1181,6 +1402,7 @@ class RectangulatorHandler:
                 tk_root.after_cancel(self._render_job)
             self._render_job = tk_root.after(delay, self._run_scheduled_render)
         except Exception:
+            self._render_job = None
             self.render_view()
 
     def _run_scheduled_render(self):
@@ -1416,6 +1638,8 @@ class Rectangulator:
         self.prev_y = None
         self.initial_xlim = self.ax.get_xlim()
         self.initial_ylim = self.ax.get_ylim()
+        self._box_background = None   # saved view pixels while a box is being drawn
+        self._frame_pending = False   # a pan frame is queued but not drawn yet
 
         # Connect the event handlers to the canvas
         self.cids = []
@@ -1425,7 +1649,51 @@ class Rectangulator:
         cid4 = self.ax.figure.canvas.mpl_connect("scroll_event", self.on_scroll)
         cid5 = self.ax.figure.canvas.mpl_connect("key_press_event", self.on_key_press)
         cid6 = self.ax.figure.canvas.mpl_connect("resize_event", self.on_resize)
-        self.cids.extend([cid1, cid2, cid3, cid4, cid5, cid6])
+        cid7 = self.ax.figure.canvas.mpl_connect("draw_event", self.on_draw)
+        self.cids.extend([cid1, cid2, cid3, cid4, cid5, cid6, cid7])
+
+    # Fast redraw helpers ----------------------------------------------------
+    def _can_blit(self):
+        canvas = self.ax.figure.canvas
+        return getattr(canvas, "supports_blit", True) and hasattr(canvas, "copy_from_bbox")
+
+    def on_draw(self, event):
+        # A full redraw happened (e.g. a re-render landed while a box is being
+        # dragged). Refresh the saved background and put the box back on top.
+        if self.rect is not None and self.rect.get_animated():
+            try:
+                self._box_background = self.ax.figure.canvas.copy_from_bbox(self.ax.bbox)
+                self.ax.draw_artist(self.rect)
+            except Exception:
+                self._box_background = None
+
+    def _draw_box_frame(self):
+        canvas = self.ax.figure.canvas
+        if self._box_background is None:
+            canvas.draw_idle()
+            return
+        try:
+            canvas.restore_region(self._box_background)
+            self.ax.draw_artist(self.rect)
+            canvas.blit(self.ax.bbox)
+        except Exception:
+            canvas.draw_idle()
+
+    def _request_pan_frame(self):
+        # Mouse-move events can arrive faster than frames are drawn; queue at
+        # most one redraw and let it pick up the latest view limits.
+        if self._frame_pending:
+            return
+        self._frame_pending = True
+
+        def run():
+            self._frame_pending = False
+            self.rectangulator_handler.draw_view_fast()
+
+        try:
+            self.ax.figure.canvas.get_tk_widget().after_idle(run)
+        except Exception:
+            run()
 
     def rename_pdf(self):
         try:
@@ -1587,16 +1855,26 @@ class Rectangulator:
         if event.key == "escape":  # reset zoom and position
             page_rect = getattr(self.rectangulator_handler, "page_rect", None)
             if page_rect is not None:
-                self.ax.set_xlim(page_rect.x0, page_rect.x1)
-                self.ax.set_ylim(page_rect.y1, page_rect.y0)
+                xlim, ylim = self.rectangulator_handler.fit_view_limits(
+                    (page_rect.x0, page_rect.x1), (page_rect.y1, page_rect.y0))
+                self.ax.set_xlim(xlim)
+                self.ax.set_ylim(ylim)
             else:
                 self.ax.set_xlim(self.initial_xlim)
                 self.ax.set_ylim(self.initial_ylim)
             self.pan_start = None
-            self.ax.figure.canvas.draw()
+            # The re-render redraws the canvas itself; no separate full draw.
             self.rectangulator_handler.schedule_render(delay=0)
 
-    def on_resize(self, event):  # Re-render to match the new canvas resolution
+    def on_resize(self, event):  # Refit to the new pane shape, then re-render
+        try:
+            xlim, ylim = self.rectangulator_handler.fit_view_limits(
+                self.ax.get_xlim(), self.ax.get_ylim())
+            self.ax.set_xlim(xlim)
+            self.ax.set_ylim(ylim)
+            self.ax.figure.canvas.draw_idle()
+        except Exception:
+            pass
         self.rectangulator_handler.schedule_render(delay=250)
 
     def on_button_press(
@@ -1619,9 +1897,22 @@ class Rectangulator:
                 (self.start_x, self.start_y), 0, 0, edgecolor=edge_color,
                 linewidth=2.2, fill=False)
             self.ax.add_patch(self.rect)
-            self.ax.figure.canvas.draw()
+            # While dragging, the box is drawn on top of a saved copy of the
+            # view (blitting) instead of redrawing the whole window per move.
+            self._box_background = None
+            if self._can_blit():
+                try:
+                    self.rect.set_animated(True)
+                    self._box_background = self.ax.figure.canvas.copy_from_bbox(self.ax.bbox)
+                except Exception:
+                    self.rect.set_animated(False)
+                    self._box_background = None
+            self._draw_box_frame()
 
         elif event.button == 2:  # middle mouse button, pan
+            # Finish any pending re-render first so panning uses the fast
+            # 1:1 bitmap instead of a mid-zoom bitmap that needs resampling.
+            self.rectangulator_handler.flush_render()
             self.pan_start = (event.x, event.y)
 
         elif event.button == 3:  # right mouse button, verify / save rectangles
@@ -1645,16 +1936,19 @@ class Rectangulator:
             self.rect.set_y(normalized.y0)
             self.rect.set_width(normalized.width)
             self.rect.set_height(normalized.height)
+            self.rect.set_animated(False)
+            self._box_background = None
             self.rectangles.append(self.rect)
             self.coordinates.append((normalized.x0, normalized.y0, normalized.width, normalized.height))
             self.rect = None
-            self.ax.figure.canvas.draw()
+            self.ax.figure.canvas.draw_idle()
 
         elif event.button == 2:  # middle mouse button, stop panning
             self.pan_start = None
             self.prev_x = None
             self.prev_y = None
-            self.rectangulator_handler.schedule_render()
+            # Fill in any area that was off the rendered bitmap during the drag
+            self.rectangulator_handler.schedule_render(delay=60)
 
     def on_move(self, event):  # Continuously update drawn rectangles
         # Pan if middle mouse button is pressed
@@ -1674,7 +1968,7 @@ class Rectangulator:
 
                 self.ax.set_xlim(new_xlim)
                 self.ax.set_ylim(new_ylim)
-                self.ax.figure.canvas.draw_idle()
+                self._request_pan_frame()
 
             self.prev_x = event.x
             self.prev_y = event.y
@@ -1698,7 +1992,7 @@ class Rectangulator:
         # Update rectangle
         self.rect.set_width(width)
         self.rect.set_height(height)
-        self.ax.figure.canvas.draw()
+        self._draw_box_frame()
 
     def on_scroll(self, event):  # Zoom in and out
         if event.button == "down":  # out
@@ -1711,15 +2005,16 @@ class Rectangulator:
             self.rectangles[specific_rect].remove()
             self.rectangles.pop(specific_rect)
             self.coordinates.pop(specific_rect)
-            self.ax.figure.canvas.draw()
+            self.ax.figure.canvas.draw_idle()
         else:
             for rect in self.rectangles:
                 rect.remove()
             self.rectangles = []
             self.coordinates = []
             self.rect = None
+            self._box_background = None
             self.correcting_rect_index = None
-            self.ax.figure.canvas.draw()
+            self.ax.figure.canvas.draw_idle()
 
     def zoom(self, x, y, zoom_factor):  # Zoom in and out with scroll wheel
         xlim = self.ax.get_xlim()
@@ -1739,9 +2034,11 @@ class Rectangulator:
 
         self.ax.set_xlim(new_xlim)
         self.ax.set_ylim(new_ylim)
-        self.ax.figure.canvas.draw()
-        # Re-render the newly visible region at full detail
-        self.rectangulator_handler.schedule_render()
+        # Re-render straight away at the new zoom. Rendering from the cached
+        # page is quick, so this replaces the old "blurry preview, then sharp
+        # render" double redraw. delay=0 still merges a burst of wheel notches
+        # into one render.
+        self.rectangulator_handler.schedule_render(delay=0)
 
     def verify_selection(self):
         if self.correcting_rect_index is not None:
