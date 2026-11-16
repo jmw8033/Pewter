@@ -21,7 +21,7 @@ import sqlite3
 import email
 import queue
 import time
-import fitz
+import pymupdf
 import sys
 import os
 import re
@@ -1574,11 +1574,11 @@ class EmailProcessor:
             if template_exists:
                 if template_exists[0] == "SPLIT_PDF":
                     self.log(f"Split invoice detected for {filename} -- {self.current_date} {self.current_time}", tag="yellow")
-                    with fitz.open(filepath) as doc:
+                    with pymupdf.open(filepath) as doc:
                         for i in range(len(doc)):
                             new_filename = f"{os.path.splitext(filename)[0]}_part{i+1}.pdf"
                             new_filepath = os.path.join(self.INVOICE_FOLDER, new_filename)
-                            new_doc = fitz.open()
+                            new_doc = pymupdf.open()
                             new_doc.insert_pdf(doc, from_page=i, to_page=i)
                             new_doc.save(new_filepath)
                             new_doc.close()

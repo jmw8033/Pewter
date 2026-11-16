@@ -16,7 +16,7 @@ import keyring
 import warnings
 import smtplib
 import json
-import fitz
+import pymupdf
 import glob
 import sys
 import re
@@ -252,21 +252,21 @@ class RectangulatorHandler:
             y0 = float(rect.get_y())
             x1 = x0 + float(rect.get_width())
             y1 = y0 + float(rect.get_height())
-        elif isinstance(rect, fitz.Rect):
+        elif isinstance(rect, pymupdf.Rect):
             x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
         else:
             x0, y0, x1, y1 = map(float, rect)
-        return fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+        return pymupdf.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
 
     def _page_rect(self, pdf_path, page_num):
         entry = self._cache_entry(pdf_path)
         if page_num in entry["page_rects"]:
-            return fitz.Rect(entry["page_rects"][page_num])
-        with fitz.open(pdf_path) as doc:
+            return pymupdf.Rect(entry["page_rects"][page_num])
+        with pymupdf.open(pdf_path) as doc:
             if not doc:
                 raise ValueError("PDF contains no pages")
             page_num = min(max(int(page_num), 0), len(doc) - 1)
-            rect = fitz.Rect(doc[page_num].rect)
+            rect = pymupdf.Rect(doc[page_num].rect)
         entry["page_rects"][page_num] = tuple(rect)
         return rect
 
@@ -278,7 +278,7 @@ class RectangulatorHandler:
         if page_num in cache:
             return cache[page_num]
 
-        with fitz.open(pdf_path) as doc:
+        with pymupdf.open(pdf_path) as doc:
             if not doc:
                 return []
             page_num = min(max(page_num, 0), len(doc) - 1)
@@ -314,7 +314,7 @@ class RectangulatorHandler:
         try:
             if minimum_chars is None:
                 minimum_chars = int(self.config.get("MIN_EMBEDDED_TEXT_CHARS", 40) or 40)
-            with fitz.open(pdf_path) as doc:
+            with pymupdf.open(pdf_path) as doc:
                 pages = len(doc)
             count = 0
             for page_num in range(pages):
@@ -332,7 +332,7 @@ class RectangulatorHandler:
 
     def get_full_text(self, pdf_path, ocr=False):
         try:
-            with fitz.open(pdf_path) as doc:
+            with pymupdf.open(pdf_path) as doc:
                 pages = len(doc)
             return "\n".join(self.get_page_text(pdf_path, i, ocr=ocr) for i in range(pages))
         except Exception:
@@ -760,7 +760,7 @@ class RectangulatorHandler:
 
                 split_vendors = [v.strip() for v in self.config.get("SPLIT_VENDORS", "").split(",") if v.strip()]
                 if expected in split_vendors:
-                    with fitz.open(pdf_path) as doc:
+                    with pymupdf.open(pdf_path) as doc:
                         if len(doc) > 1:
                             self.log(f"Split vendor '{expected}' detected with {len(doc)} pages.")
                             return ["SPLIT_PDF", expected]
@@ -808,7 +808,7 @@ class RectangulatorHandler:
         self.page_image = None
         self.page_rect = None
         self._render_job = None
-        doc_temp = fitz.open(pdf_path)
+        doc_temp = pymupdf.open(pdf_path)
         self.total_pages = len(doc_temp)
         doc_temp.close()
 
@@ -822,9 +822,9 @@ class RectangulatorHandler:
                 self.rectangulator_instance.reset_rectangles()
                 self.rectangulator_instance.page_num = page_num
 
-            doc = fitz.open(pdf_path)
+            doc = pymupdf.open(pdf_path)
             page = doc[page_num]
-            self.page_rect = fitz.Rect(page.rect)
+            self.page_rect = pymupdf.Rect(page.rect)
             doc.close()
 
             self.current_page = page_num
@@ -1208,7 +1208,7 @@ class RectangulatorHandler:
             xlim, ylim = self.fit_view_limits(xlim, ylim)
             x0, x1 = sorted(xlim)
             y0, y1 = sorted(ylim)
-            view = fitz.Rect(x0, y0, x1, y1)
+            view = pymupdf.Rect(x0, y0, x1, y1)
 
             visible = view & self.page_rect
             if visible.is_empty or visible.width <= 0 or visible.height <= 0:
@@ -1227,7 +1227,7 @@ class RectangulatorHandler:
             # Render a margin around the view so short pans stay filled in.
             mx = view.width * self.RENDER_MARGIN
             my = view.height * self.RENDER_MARGIN
-            clip = fitz.Rect(view.x0 - mx, view.y0 - my, view.x1 + mx, view.y1 + my) & self.page_rect
+            clip = pymupdf.Rect(view.x0 - mx, view.y0 - my, view.x1 + mx, view.y1 + my) & self.page_rect
 
             # Keep the bitmap within a sane memory budget: drop the margin
             # first, and only then lower the render resolution.
@@ -1238,12 +1238,12 @@ class RectangulatorHandler:
             if pixels > self.MAX_RENDER_PIXELS:
                 zoom *= (self.MAX_RENDER_PIXELS / pixels) ** 0.5
 
-            matrix = fitz.Matrix(zoom, zoom)
+            matrix = pymupdf.Matrix(zoom, zoom)
             display_list = self._get_display_list()
             if display_list is not None:
                 pix = display_list.get_pixmap(matrix=matrix, clip=clip, alpha=False)
             else:
-                doc = fitz.open(self.pdf_path)
+                doc = pymupdf.open(self.pdf_path)
                 page = doc[min(max(self.current_page, 0), len(doc) - 1)]
                 pix = page.get_pixmap(matrix=matrix, clip=clip)
             img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
@@ -1338,7 +1338,7 @@ class RectangulatorHandler:
                 cache = self._view_cache = {
                     "path": path,
                     "signature": signature,
-                    "doc": fitz.open(stream=data, filetype="pdf"),
+                    "doc": pymupdf.open(stream=data, filetype="pdf"),
                     "lists": {},
                 }
             doc = cache["doc"]
@@ -1436,10 +1436,10 @@ class RectangulatorHandler:
                 return ""
             selected = []
             for word in self._get_page_words(pdf_path, page_num, ocr=ocr):
-                word_rect = fitz.Rect(*map(float, word[:4]))
+                word_rect = pymupdf.Rect(*map(float, word[:4]))
                 if word_rect.is_empty:
                     continue
-                center = fitz.Point((word_rect.x0 + word_rect.x1) / 2, (word_rect.y0 + word_rect.y1) / 2)
+                center = pymupdf.Point((word_rect.x0 + word_rect.x1) / 2, (word_rect.y0 + word_rect.y1) / 2)
                 intersection = word_rect & selection
                 overlap = 0.0 if intersection.is_empty else (intersection.get_area() / max(word_rect.get_area(), 1e-9))
                 if selection.contains(center) or overlap >= 0.30:

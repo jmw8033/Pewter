@@ -1,5 +1,6 @@
 from EmailProcessor import EmailProcessor
 import json, os, keyring
+from playsound3 import playsound
 
 def get_password(username):
     password = keyring.get_password("PewterInvoiceProcessor", username)
@@ -13,4 +14,5 @@ with open(os.path.join(os.path.dirname(__file__), "config.json")) as f:
     config = json.load(f)
     
 if __name__ == "__main__":
+    playsound("startup.mp3", block=False)
     EmailProcessor = EmailProcessor(config["APC_USER"], get_password(config["APC_USER"]))
