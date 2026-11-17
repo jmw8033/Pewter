@@ -221,7 +221,7 @@ class EmailProcessor:
                 self.root.state("zoomed")
             except tk.TclError:
                 pass
-            self.root.title(f"Pewter — {username.upper()}")
+            self.root.title("Pewter")
 
             style = ttk.Style(self.root)
             style.theme_use("clam")
