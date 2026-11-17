@@ -147,7 +147,7 @@ class EmailProcessor:
 
     # CONSTANTS
     CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-    ICON_PATH = os.path.join(BASE_DIR, "Hotpot.ico")
+    ICON_PATH = os.path.join(BASE_DIR, "icon.ico")
     TEMPLATE_FOLDER = config["TEMPLATE_FOLDER"]
     OCR_TEMPLATE_FOLDER = config["OCR_TEMPLATE_FOLDER"]
     STATEMENT_TEMPLATE_FOLDER = config["STATEMENT_TEMPLATE_FOLDER"]
